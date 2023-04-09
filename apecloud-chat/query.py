@@ -25,7 +25,7 @@ def main():
     print("query:", query_str)
 
     # set env for OpenAI api key
-    os.environ['OPENAI_API_KEY'] = "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"
+    os.environ['OPENAI_API_KEY'] = ""
 
     # set log level
     #logging.basicConfig(stream=sys.stdout, level=logging.DEBUG)
