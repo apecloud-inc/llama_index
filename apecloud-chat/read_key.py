@@ -2,7 +2,7 @@
 def read_key_from_file(file_name):
     with open(file_name, 'rb') as f:
         key = f.read()
-    return key.strip()
+    return key.strip().decode("utf-8")
 
 if __name__ == "__main__":
     key_file = "key.txt"
