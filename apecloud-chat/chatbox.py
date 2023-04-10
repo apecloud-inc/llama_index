@@ -11,11 +11,11 @@ from langchain.agents import Tool
 from langchain.chains.conversation.memory import ConversationBufferMemory
 from langchain.chat_models import ChatOpenAI
 from langchain.agents import initialize_agent
-from llama_index.langchain_helpers.agents import LlamaToolkit, create_llama_agent, IndexToolConfig, GraphToolConfig
-from llama_index.indices.query.query_transform.base import DecomposeQueryTransform
-from llama_index import GPTSimpleVectorIndex, SimpleDirectoryReader, QuestionAnswerPrompt
-from llama_index import LLMPredictor, PromptHelper, ServiceContext
-from llama_index.indices.composability import ComposableGraph
+from gpt_index.langchain_helpers.agents import LlamaToolkit, create_llama_agent, IndexToolConfig, GraphToolConfig
+from gpt_index.indices.query.query_transform.base import DecomposeQueryTransform
+from gpt_index import GPTSimpleVectorIndex, SimpleDirectoryReader, QuestionAnswerPrompt
+from gpt_index import LLMPredictor, PromptHelper, ServiceContext
+from gpt_index.indices.composability import ComposableGraph
 from gpt_index import GPTListIndex, SimpleDirectoryReader
 from gpt_index.embeddings.openai import OpenAIEmbedding
 from gpt_index.embeddings.langchain import LangchainEmbedding
@@ -64,8 +64,8 @@ def main():
     # define a list index over the vector indices
     # allow us to synthesize information across each index
     graph = ComposableGraph.from_indices(
-        GPTListIndex,
-        [index_set["doc"], index_set["code"]],
+        root_index_cls = GPTListIndex,
+        children_indices = [index_set["doc"], index_set["code"]],
         index_summaries = index_summaries,
         service_context = service_context,
     )
