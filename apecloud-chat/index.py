@@ -27,7 +27,7 @@ def main():
     logging.getLogger().addHandler(logging.StreamHandler(stream=sys.stdout))
 
     doc_path =  "/root/kubeblocks/docs/"
-    documents = SimpleDirectoryReader(doc_path, recursive=True).load_data()
+    documents = SimpleDirectoryReader(doc_path, required_exts=[".md"], recursive=True).load_data()
     index = GPTSimpleVectorIndex.from_documents(documents)
     index.save_to_disk('doc.json')
 
