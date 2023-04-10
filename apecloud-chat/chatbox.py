@@ -24,15 +24,12 @@ from read_key import read_key_from_file
 
 def parse_arguments():
     parser = argparse.ArgumentParser(description="Query Engine for KubeBlocks.")
-    parser.add_argument("query_str", type=str, help="Query string for ask.")
     parser.add_argument("key_file", type=str, help="Key file for OpenAI_API_KEY.")
     return parser.parse_args()
 
 def main():
     args = parse_arguments()
-    query_str = args.query_str
     key_file = args.key_file
-    print("query:", query_str)
 
     openai_api_key = read_key_from_file(key_file)
     # set env for OpenAI api key
