@@ -45,6 +45,7 @@ class LlamaIndexTool(BaseTool):
     # NOTE: name/description still needs to be set
     index: BaseGPTIndex
     query_kwargs: Dict = Field(default_factory=dict)
+    tool_kwargs: Dict = Field(default_factory=dict)
 
     @classmethod
     def from_tool_config(cls, tool_config: IndexToolConfig) -> "LlamaIndexTool":
@@ -54,7 +55,7 @@ class LlamaIndexTool(BaseTool):
             name=tool_config.name,
             description=tool_config.description,
             query_kwargs=tool_config.index_query_kwargs,
-            **tool_config.tool_kwargs,
+            tool_kwargs=tool_config.tool_kwargs,
         )
 
     def _run(self, tool_input: str) -> str:
@@ -72,6 +73,7 @@ class LlamaGraphTool(BaseTool):
     # NOTE: name/description still needs to be set
     graph: ComposableGraph
     query_configs: List[Dict] = Field(default_factory=list)
+    tool_kwargs: Dict = Field(default_factory=dict)
 
     @classmethod
     def from_tool_config(cls, tool_config: GraphToolConfig) -> "LlamaGraphTool":
@@ -81,7 +83,7 @@ class LlamaGraphTool(BaseTool):
             name=tool_config.name,
             description=tool_config.description,
             query_configs=tool_config.query_configs,
-            **tool_config.tool_kwargs,
+            tool_kwargs=tool_config.tool_kwargs,
         )
 
     def _run(self, tool_input: str) -> str:
