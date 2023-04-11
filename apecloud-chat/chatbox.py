@@ -11,7 +11,7 @@ from langchain.agents import Tool
 from langchain.chains.conversation.memory import ConversationBufferMemory
 from langchain.chat_models import ChatOpenAI
 from langchain.agents import initialize_agent
-from gpt_index.langchain_helpers.agents import LlamaToolkit, create_llama_agent, IndexToolConfig, GraphToolConfig
+from gpt_index.langchain_helpers.agents import LlamaToolkit, create_llama_chat_agent, IndexToolConfig, GraphToolConfig
 from gpt_index.indices.query.query_transform.base import DecomposeQueryTransform
 from gpt_index import GPTSimpleVectorIndex, SimpleDirectoryReader, QuestionAnswerPrompt
 from gpt_index import LLMPredictor, PromptHelper, ServiceContext
@@ -104,7 +104,7 @@ def main():
 
     # define toolkit
     index_configs = []
-    for y in range ["doc", "code"]:
+    for y in ["doc", "code"]:
         tool_config = IndexToolConfig(
             index = index_set[y],
             name = f"Vectore Index {y}",
@@ -122,7 +122,7 @@ def main():
     # create the llama agent
     memory = ConversationBufferMemory(memory_key="chat_history")
     llm = OpenAI(temperature=0)
-    agent_chain = create_llama_agent(
+    agent_chain = create_llama_chat_agent(
         tookit,
         llm,
         memory = memory,
