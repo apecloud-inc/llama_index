@@ -26,23 +26,31 @@ def main():
     logging.basicConfig(stream=sys.stdout, level=logging.DEBUG)
     logging.getLogger().addHandler(logging.StreamHandler(stream=sys.stdout))
 
-    doc_path =  "/root/kubeblocks/docs/"
-    documents = SimpleDirectoryReader(doc_path, required_exts=[".md"], recursive=True).load_data()
-    index = GPTSimpleVectorIndex.from_documents(documents)
-    index.save_to_disk('doc.json')
+    if False:
+        doc_path =  "/root/kubeblocks/docs/"
+        documents = SimpleDirectoryReader(doc_path, required_exts=[".md"], recursive=True).load_data()
+        index = GPTSimpleVectorIndex.from_documents(documents)
+        index.save_to_disk('doc.json')
 
-    code_path = "/root/kubeblocks/"
-    go_files = list_go_files_recursive(code_path)
+    if True:
+        doc_path =  "/root/kubeblocks/"
+        documents = SimpleDirectoryReader(doc_path, required_exts=[".yaml"], recursive=True).load_data()
+        index = GPTSimpleVectorIndex.from_documents(documents)
+        index.save_to_disk('config.json')
 
-    documents = []
-    for go_file in go_files:
-        print(go_file)
-        docs = SimpleDirectoryReader(input_files=[go_file]).load_data()
-        if len(docs) > 0:
-            documents.append(docs[0])
+    if False:
+        code_path = "/root/kubeblocks/"
+        go_files = list_go_files_recursive(code_path)
 
-    index = GPTSimpleVectorIndex.from_documents(documents)
-    index.save_to_disk('code.json')
+        documents = []
+        for go_file in go_files:
+            print(go_file)
+            docs = SimpleDirectoryReader(input_files=[go_file]).load_data()
+            if len(docs) > 0:
+                documents.append(docs[0])
+
+        index = GPTSimpleVectorIndex.from_documents(documents)
+        index.save_to_disk('code.json')
 
 if __name__ == "__main__":
     main()

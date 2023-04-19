@@ -11,7 +11,8 @@ from langchain.agents import Tool
 from langchain.chains.conversation.memory import ConversationBufferMemory
 from langchain.chat_models import ChatOpenAI
 from langchain.agents import initialize_agent
-from gpt_index.langchain_helpers.agents import LlamaToolkit, create_llama_chat_agent, IndexToolConfig, GraphToolConfig
+from langchain.agents.agent_types import AgentType
+from gpt_index.langchain_helpers.agents import LlamaToolkit, create_llama_agent, create_llama_chat_agent, IndexToolConfig, GraphToolConfig
 from gpt_index.indices.query.query_transform.base import DecomposeQueryTransform
 from gpt_index import GPTSimpleVectorIndex, SimpleDirectoryReader, QuestionAnswerPrompt
 from gpt_index import LLMPredictor, PromptHelper, ServiceContext
@@ -34,18 +35,20 @@ def main():
     openai_api_key = read_key_from_file(key_file)
     # set env for OpenAI api key
     os.environ['OPENAI_API_KEY'] = openai_api_key
+    print(f"OPENAI_API_KEY:{openai_api_key}")
 
     # set log level
-    logging.basicConfig(stream=sys.stdout, level=logging.DEBUG)
+    logging.basicConfig(stream=sys.stdout, level=logging.ERROR)
     logging.getLogger().addHandler(logging.StreamHandler(stream=sys.stdout))# define LLM
 
     # initialize the index set with codes and documents
     index_set = {}
-    index_set["doc"] = GPTSimpleVectorIndex.load_from_disk('doc.json')
-    index_set["code"] = GPTSimpleVectorIndex.load_from_disk('code.json')
+    index_set["Docs"] = GPTSimpleVectorIndex.load_from_disk('doc.json')
+    index_set["Code"] = GPTSimpleVectorIndex.load_from_disk('code.json')
+    index_set["Config"] = GPTSimpleVectorIndex.load_from_disk('config.json')
 
     # initialize summary for each index
-    index_summaries = ["design and user documents for kubeblocks", "codes of implementations of kubeblocks"]
+    index_summaries = ["design and user documents for kubeblocks", "codes of implementations of kubeblocks", "config for kubeblocks"]
 
     # define a LLMPredictor
     llm_predictor = LLMPredictor(llm=OpenAI(temperature=0, model_name="text-davinci-003"))
@@ -65,7 +68,7 @@ def main():
     # allow us to synthesize information across each index
     graph = ComposableGraph.from_indices(
         root_index_cls = GPTListIndex,
-        children_indices = [index_set["doc"], index_set["code"]],
+        children_indices = [index_set["Docs"], index_set["Code"], index_set["Config"]],
         index_summaries = index_summaries,
         service_context = service_context,
     )
@@ -79,7 +82,7 @@ def main():
             "index_struct_type": "simple_dict",
             "query_mode": "default",
             "query_kwargs":{
-                "similarity_top_k": 1,
+                "similarity_top_k": 3,
             },
             "query_transform": decompose_transform
         },
@@ -104,15 +107,38 @@ def main():
 
     # define toolkit
     index_configs = []
-    for y in ["doc", "code"]:
-        tool_config = IndexToolConfig(
-            index = index_set[y],
-            name = f"Vectore Index {y}",
-            description = f"useful for when you want to answer queries aout the {y} of kubeblocks",
-            index_query_kwargs = {"similarity_top_k": 3},
-            tool_kwargs = {"retrun_direct": True}
-        )
-        index_configs.append(tool_config)
+    tool_config = IndexToolConfig(
+        index = index_set["Docs"],
+        name = f"Vector Index Docs",
+        description = '''answer questions about how to install, deploy, maintain kubeblocks; \ 
+        questions about clusterdefinition, clusterversion, cluster; \
+        qusetions about lifecycle, monitoring, backup, safety for all kinds of atabases''',
+        index_query_kwargs = {"similarity_top_k": 3},
+        tool_kwargs = {"retrun_direct": True}
+    )
+    index_configs.append(tool_config)
+
+    tool_config = IndexToolConfig(
+        index = index_set["Code"],
+        name = f"Vector Index Code",
+        description = '''answer questions about the code implementations of kubeblocks; 
+        questions about the code of clusterdefinition, clusterversion, cluster;
+        qusetions about lifecycle, monitoring, backup, safety for all kinds of atabases''',
+        index_query_kwargs = {"similarity_top_k": 3},
+        tool_kwargs = {"retrun_direct": True}
+    )
+    index_configs.append(tool_config)
+
+    tool_config = IndexToolConfig(
+        index = index_set["Config"],
+        name = f"Vector Index Config",
+        description = '''answer questions about the generation of configs in kubeblocks; 
+        questions about the configs of clusterdefinition, clusterversion, cluster;
+        backuppolicy, backup, RBAC, OpsRequest, podSpec, containers, volumeClaimTemplates, volumes''',
+        index_query_kwargs = {"similarity_top_k": 3},
+        tool_kwargs = {"retrun_direct": True}
+    )
+    index_configs.append(tool_config)
 
     tookit = LlamaToolkit(
         index_configs = index_configs,
@@ -122,9 +148,10 @@ def main():
     # create the llama agent
     memory = ConversationBufferMemory(memory_key="chat_history")
     llm = OpenAI(temperature=0)
-    agent_chain = create_llama_chat_agent(
+    agent_chain = create_llama_agent(
         tookit,
         llm,
+        #agent = AgentType.CHAT_CONVERSATIONAL_REACT_DESCRIPTION,
         memory = memory,
         verbose = True
     )
@@ -132,7 +159,7 @@ def main():
     while True:
         text_input = input("User:")
         response = agent_chain.run(input=text_input)
-        print(f'Agent: {response}')
+        #print(f"Agent: {response}")
 
 
 if __name__ == "__main__":
