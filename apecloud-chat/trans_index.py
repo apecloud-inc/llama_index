@@ -58,11 +58,12 @@ def main():
         port=6333,
         grpc_port=6334,
         prefer_grpc=False,
-        https=False
+        https=False,
+        timeout=300
     )
 
-    collection_name = "llama_index"
-    vector_index = GPTSimpleVectorIndex.load_from_disk('doc.json')
+    collection_name = "kubeblocks_code"
+    vector_index = GPTSimpleVectorIndex.load_from_disk('code.json')
     docs = vector_index.docstore.docs
     embedding_dict = vector_index.get_vector_store().get_embedding_dict()
 
@@ -81,7 +82,7 @@ def main():
             ),
         )
 
-    qdrant_store = QdrantVectorStore(collection_name="llama_index", client=client)
+    qdrant_store = QdrantVectorStore(collection_name=collection_name, client=client)
 
     count = 0
     new_ids = []
