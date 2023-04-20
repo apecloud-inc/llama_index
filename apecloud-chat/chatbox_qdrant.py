@@ -12,9 +12,11 @@ from gpt_index.indices.query.query_transform.base import DecomposeQueryTransform
 from gpt_index import GPTSimpleVectorIndex, SimpleDirectoryReader, QuestionAnswerPrompt
 from gpt_index import LLMPredictor, PromptHelper, ServiceContext
 from gpt_index.indices.composability import ComposableGraph
+from gpt_index.indices.base import IS
 from gpt_index import GPTListIndex, SimpleDirectoryReader
 import qdrant_client
 from gpt_index.vector_stores.qdrant import QdrantVectorStore
+from gpt_index.data_structs.data_structs_v2 import V2IndexStruct,IndexDict
 from gpt_index import GPTQdrantIndex
 from read_key import read_key_from_file
 
@@ -46,12 +48,13 @@ def main():
         timeout=300
     )
 
-
     # initialize the index set with codes and documents
     index_set = {}
-    index_set["Docs"] = GPTQdrantIndex(client=client, collection_name="kubeblocks_doc")
-    index_set["Code"] = GPTQdrantIndex(client=client, collection_name="kubeblocks_code")
-    index_set["Config"] = GPTQdrantIndex(client=client, collection_name="kubeblocks_config")
+    index_struct = IndexDict(summary=None)
+
+    index_set["Docs"] = GPTQdrantIndex(client=client, collection_name="kubeblocks_doc", index_struct=index_struct)
+    index_set["Code"] = GPTQdrantIndex(client=client, collection_name="kubeblocks_code", index_struct=index_struct)
+    index_set["Config"] = GPTQdrantIndex(client=client, collection_name="kubeblocks_config", index_struct=index_struct)
 
     # initialize summary for each index
     index_summaries = ["design and user documents for kubeblocks", "codes of implementations of kubeblocks", "config for kubeblocks"]
