@@ -1,13 +1,8 @@
 import sys
 import os
-import torch
-import openai
 import argparse
 import logging
 from langchain import OpenAI
-from langchain.llms.base import LLM
-from langchain.embeddings.huggingface import HuggingFaceEmbeddings
-from langchain.agents import Tool
 from langchain.chains.conversation.memory import ConversationBufferMemory
 from langchain.chat_models import ChatOpenAI
 from langchain.agents import initialize_agent
@@ -18,9 +13,9 @@ from gpt_index import GPTSimpleVectorIndex, SimpleDirectoryReader, QuestionAnswe
 from gpt_index import LLMPredictor, PromptHelper, ServiceContext
 from gpt_index.indices.composability import ComposableGraph
 from gpt_index import GPTListIndex, SimpleDirectoryReader
-from gpt_index.embeddings.openai import OpenAIEmbedding
-from gpt_index.embeddings.langchain import LangchainEmbedding
-from transformers import pipeline
+import qdrant_client
+from gpt_index.vector_stores.qdrant import QdrantVectorStore
+from gpt_index import GPTQdrantIndex
 from read_key import read_key_from_file
 
 def parse_arguments():
@@ -41,11 +36,22 @@ def main():
     logging.basicConfig(stream=sys.stdout, level=logging.ERROR)
     logging.getLogger().addHandler(logging.StreamHandler(stream=sys.stdout))# define LLM
 
+    # initialize the qdrant client
+    client = qdrant_client.QdrantClient(
+        url="http://localhost",
+        port=6333,
+        grpc_port=6334,
+        prefer_grpc=False,
+        https=False,
+        timeout=300
+    )
+
+
     # initialize the index set with codes and documents
     index_set = {}
-    index_set["Docs"] = GPTSimpleVectorIndex.load_from_disk('doc.json')
-    index_set["Code"] = GPTSimpleVectorIndex.load_from_disk('code.json')
-    index_set["Config"] = GPTSimpleVectorIndex.load_from_disk('config.json')
+    index_set["Docs"] = GPTQdrantIndex(client=client, collection_name="kubeblocks_doc")
+    index_set["Code"] = GPTQdrantIndex(client=client, collection_name="kubeblocks_code")
+    index_set["Config"] = GPTQdrantIndex(client=client, collection_name="kubeblocks_config")
 
     # initialize summary for each index
     index_summaries = ["design and user documents for kubeblocks", "codes of implementations of kubeblocks", "config for kubeblocks"]
