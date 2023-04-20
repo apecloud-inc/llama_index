@@ -67,6 +67,8 @@ class SimpleVectorStore(VectorStore):
         return {
             "simple_vector_store_data_dict": self._data.to_dict(),
         }
+    def get_embedding_dict(self) -> dict:
+        return self._data.embedding_dict
 
     def get(self, text_id: str) -> List[float]:
         """Get embedding."""

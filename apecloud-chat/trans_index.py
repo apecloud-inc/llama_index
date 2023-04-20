@@ -4,15 +4,42 @@ import logging
 import sys
 import os
 import argparse
+from typing import Any, Dict, List, Optional, cast
+
 from gpt_index import GPTListIndex, SimpleDirectoryReader
 from traverse_code_files import  list_go_files_recursive
 from gpt_index.langchain_helpers.text_splitter import TokenTextSplitter
+from gpt_index import GPTQdrantIndex
+from gpt_index.vector_stores.qdrant import QdrantVectorStore
+from gpt_index.vector_stores.simple import SimpleVectorStore
+from gpt_index.utils import iter_batch
+from qdrant_client.http import models as rest
+
+from gpt_index.vector_stores.types import (
+    NodeEmbeddingResult,
+    VectorStore,
+    VectorStoreQueryResult,
+    VectorStoreQuery,
+)
+
+import qdrant_client
 from read_key import read_key_from_file
 
 def parse_arguments():
     parser = argparse.ArgumentParser(description="Query Engine for KubeBlocks.")
     parser.add_argument("key_file", type=str, help="Key file for OpenAI_API_KEY.")
     return parser.parse_args()
+
+def collection_exists(client: qdrant_client, collection_name: str) -> bool:
+    """Check if a collection exists."""
+    from grpc import RpcError
+    from qdrant_client.http.exceptions import UnexpectedResponse
+
+    try:
+        client.get_collection(collection_name)
+    except (RpcError, UnexpectedResponse, ValueError):
+        return False
+    return True
 
 def main():
     args = parse_arguments()
@@ -26,27 +53,66 @@ def main():
     logging.basicConfig(stream=sys.stdout, level=logging.DEBUG)
     logging.getLogger().addHandler(logging.StreamHandler(stream=sys.stdout))
 
-    if True:
-        index = GPTSimpleVectorIndex.load_from_disk('doc.json')
+    client = qdrant_client.QdrantClient(
+        url="http://localhost",
+        port=6333,
+        grpc_port=6334,
+        prefer_grpc=False,
+        https=False
+    )
 
-    if False:
-        documents = SimpleDirectoryReader(doc_path, required_exts=[".yaml"], recursive=True).load_data()
-        index = GPTSimpleVectorIndex.from_documents(documents)
-        index.save_to_disk('config.json')
+    collection_name = "llama_index"
+    vector_index = GPTSimpleVectorIndex.load_from_disk('doc.json')
+    docs = vector_index.docstore.docs
+    embedding_dict = vector_index.get_vector_store().get_embedding_dict()
 
-    if False:
-        code_path = "/root/kubeblocks/"
-        go_files = list_go_files_recursive(code_path)
+    embedding_len = 0
+    for doc_id, vector in embedding_dict.items():
+        embedding_len = len(vector)
+        print(f"embedding_len:{embedding_len}")
+        break
 
-        documents = []
-        for go_file in go_files:
-            print(go_file)
-            docs = SimpleDirectoryReader(input_files=[go_file]).load_data()
-            if len(docs) > 0:
-                documents.append(docs[0])
+    if len(docs.items()) > 0 and not collection_exists(client, collection_name):
+        client.create_collection(
+            collection_name=collection_name,
+            vectors_config=rest.VectorParams(
+                size=embedding_len,
+                distance=rest.Distance.COSINE,
+            ),
+        )
 
-        index = GPTSimpleVectorIndex.from_documents(documents)
-        index.save_to_disk('code.json')
+    qdrant_store = QdrantVectorStore(collection_name="llama_index", client=client)
+
+    count = 0
+    new_ids = []
+    vectors = []
+    payloads = []
+
+    for doc_id, doc in docs.items():
+        count += 1
+        if count == 100:
+            client.upsert(
+                collection_name=collection_name,
+                points=rest.Batch.construct(
+                    ids=new_ids,
+                    vectors=vectors,
+                    payloads=payloads,
+                ),
+            )
+            count = 0
+        else:
+            new_ids.append(doc_id)
+            embedding = embedding_dict[doc_id]
+            vectors.append(embedding)
+            payloads.append(
+                {
+                    "doc_id": doc.doc_id,
+                    "text": doc.text,
+                    "extra_info": doc.extra_info,
+                }
+            )
+
+
 
 if __name__ == "__main__":
     main()

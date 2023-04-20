@@ -66,6 +66,9 @@ class GPTVectorStoreIndex(BaseGPTIndex[IndexDict]):
             QueryMode.EMBEDDING: GPTVectorStoreIndexQuery,
         }
 
+    def get_vector_store(self):
+        return self._vector_store
+
     def _get_node_embedding_results(
         self, nodes: Sequence[Node], existing_node_ids: Set
     ) -> List[NodeEmbeddingResult]:
