@@ -59,11 +59,7 @@ class LlamaIndexTool(BaseTool):
     # NOTE: name/description still needs to be set
     index: BaseGPTIndex
     query_kwargs: Dict = Field(default_factory=dict)
-<<<<<<< HEAD
-    tool_kwargs: Dict = Field(default_factory=dict)
-=======
     return_sources: bool = False
->>>>>>> upstream/main
 
     @classmethod
     def from_tool_config(cls, tool_config: IndexToolConfig) -> "LlamaIndexTool":
