@@ -111,7 +111,8 @@ def main():
         name = f"Graph Index",
         description = "useful when you want to answer queries that about how to use and develop with kubeblocks",
         query_configs = query_configs,
-        tool_kwargs = {"return_direct": True}
+        tool_kwargs = {"return_direct": True, "return_sources": True},
+        return_sources=True
     )
 
     # define toolkit
@@ -123,7 +124,7 @@ def main():
         questions about clusterdefinition, clusterversion, cluster; \
         qusetions about lifecycle, monitoring, backup, safety for all kinds of atabases''',
         index_query_kwargs = {"similarity_top_k": 3},
-        tool_kwargs = {"retrun_direct": True}
+        tool_kwargs = {"return_direct": True, "return_sources": True}
     )
     index_configs.append(tool_config)
 
@@ -134,7 +135,7 @@ def main():
         questions about the code of clusterdefinition, clusterversion, cluster;
         qusetions about lifecycle, monitoring, backup, safety for all kinds of atabases''',
         index_query_kwargs = {"similarity_top_k": 3},
-        tool_kwargs = {"retrun_direct": True}
+        tool_kwargs = {"return_direct": True, "return_sources": True}
     )
     index_configs.append(tool_config)
 
@@ -145,7 +146,7 @@ def main():
         questions about the configs of clusterdefinition, clusterversion, cluster;
         backuppolicy, backup, RBAC, OpsRequest, podSpec, containers, volumeClaimTemplates, volumes''',
         index_query_kwargs = {"similarity_top_k": 3},
-        tool_kwargs = {"retrun_direct": True}
+        tool_kwargs = {"return_direct": True, "return_sources": True}
     )
     index_configs.append(tool_config)
 
@@ -168,7 +169,7 @@ def main():
     while True:
         text_input = input("User:")
         response = agent_chain.run(input=text_input)
-        #print(f"Agent: {response}")
+        print(f"Agent: {response}")
 
 
 if __name__ == "__main__":

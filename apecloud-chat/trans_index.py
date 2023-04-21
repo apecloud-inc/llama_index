@@ -62,8 +62,8 @@ def main():
         timeout=300
     )
 
-    collection_name = "kubeblocks_code"
-    vector_index = GPTSimpleVectorIndex.load_from_disk('code.json')
+    collection_name = "kubeblocks_config"
+    vector_index = GPTSimpleVectorIndex.load_from_disk('config.json')
     docs = vector_index.docstore.docs
     embedding_dict = vector_index.get_vector_store().get_embedding_dict()
 
