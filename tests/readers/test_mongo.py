@@ -1,8 +1,16 @@
 from unittest.mock import patch
 
-from gpt_index.readers.mongo import SimpleMongoReader
+import pytest
+
+from llama_index.readers.mongo import SimpleMongoReader
+
+try:
+    from pymongo import MongoClient
+except ImportError:
+    MongoClient = None  # type: ignore
 
 
+@pytest.mark.skipif(MongoClient is None, reason="pymongo not installed")
 def test_load_data() -> None:
     """Test Mongo reader using default field_names."""
     mock_cursor = [{"text": "one"}, {"text": "two"}, {"text": "three"}]
@@ -19,6 +27,7 @@ def test_load_data() -> None:
         assert documents[2].text == "three"
 
 
+@pytest.mark.skipif(MongoClient is None, reason="pymongo not installed")
 def test_load_data_with_field_name() -> None:
     """Test Mongo reader using passed in field_names."""
     mock_cursor = [

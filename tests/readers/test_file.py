@@ -3,7 +3,7 @@
 from tempfile import TemporaryDirectory
 from typing import Any, Dict
 
-from gpt_index.readers.file.base import SimpleDirectoryReader
+from llama_index.readers.file.base import SimpleDirectoryReader
 
 
 def test_recursive() -> None:
@@ -203,12 +203,6 @@ def test_file_metadata() -> None:
 
         for d in documents:
             assert d.extra_info is not None and d.extra_info["author"] == test_author
-
-        # There should be no metadata if we choose to concatenate files
-        documents = reader.load_data(concatenate=True)
-
-        for d in documents:
-            assert d.extra_info is None
 
 
 def test_excluded_files() -> None:

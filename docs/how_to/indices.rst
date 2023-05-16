@@ -1,4 +1,4 @@
-Index Structures
+🗃️ Index Structures
 ================
 
 At the core of LlamaIndex is a set of index data structures. You can choose to use them on their own, 
@@ -10,9 +10,20 @@ capabilities our indices/graphs provide.
 
 .. toctree::
    :maxdepth: 1
-   :caption: Index Structures
+   :caption: Guides
 
    /guides/primer/index_guide.md
    index_structs/update.md
    index_structs/composability.md
+   index_structs/vector_store_guide.ipynb
+
+
+.. toctree::
+   :maxdepth: 1
+   :caption: Examples
+
+   ../examples/index_structs/knowledge_graph/KnowledgeGraphDemo.ipynb
+   ../examples/index_structs/struct_indices/PandasIndexDemo.ipynb
+   ../examples/index_structs/struct_indices/SQLIndexDemo.ipynb
+   ../examples/index_structs/doc_summary/DocSummary.ipynb
 
