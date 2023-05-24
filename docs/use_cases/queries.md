@@ -13,17 +13,18 @@ a simple in-memory vector store for you to get started, but you can also choose
 to use any one of our [vector store integrations](/how_to/integrations/vector_stores.md):
 
 ```python
-from llama_index import GPTSimpleVectorIndex, SimpleDirectoryReader
+from llama_index import GPTVectorStoreIndex, SimpleDirectoryReader
 documents = SimpleDirectoryReader('data').load_data()
-index = GPTSimpleVectorIndex.from_documents(documents)
-response = index.query("What did the author do growing up?")
+index = GPTVectorStoreIndex.from_documents(documents)
+query_engine = index.as_query_engine()
+response = query_engine.query("What did the author do growing up?")
 print(response)
 
 ```
 
 Relevant Resources:
 - [Quickstart](/getting_started/starter_example.md)
-- [Example notebook](https://github.com/jerryjliu/llama_index/tree/main/examples/vector_indices)
+- [Example](../examples/vector_stores/SimpleIndexDemo.ipynb) ([Notebook](https://github.com/jerryjliu/llama_index/tree/main/docs/examples/vector_stores/SimpleIndexDemo.ipynb))
 
 
 ### Summarization
@@ -40,7 +41,10 @@ Empirically, setting `response_mode="tree_summarize"` also leads to better summa
 ```python
 index = GPTListIndex.from_documents(documents)
 
-response = index.query("<summarization_query>", response_mode="tree_summarize")
+query_engine = index.as_query_engine(
+    response_mode="tree_summarize"
+)
+response = query_engine.query("<summarization_query>")
 ```
 
 ### Queries over Structured Data
@@ -48,11 +52,16 @@ response = index.query("<summarization_query>", response_mode="tree_summarize")
 LlamaIndex supports queries over structured data, whether that's a Pandas DataFrame or a SQL Database.
 
 Here are some relevant resources:
+
+**Guides**
+
 - [Guide on Text-to-SQL](/guides/tutorials/sql_guide.md)
-- [SQL Demo Notebook 1](https://github.com/jerryjliu/llama_index/blob/main/examples/struct_indices/SQLIndexDemo.ipynb)
-- [SQL Demo Notebook 2 (Context)](https://github.com/jerryjliu/llama_index/blob/main/examples/struct_indices/SQLIndexDemo-Context.ipynb)
-- [SQL Demo Notebook 3 (Big tables)](https://github.com/jerryjliu/llama_index/blob/main/examples/struct_indices/SQLIndexDemo-ManyTables.ipynb)
-- [Pandas Demo Notebook](https://github.com/jerryjliu/llama_index/blob/main/examples/struct_indices/PandasIndexDemo.ipynb).
+
+**Examples**
+- [SQL Demo 1](../examples/index_structs/struct_indices/SQLIndexDemo.ipynb) ([Notebook](https://github.com/jerryjliu/llama_index/blob/main/docs/examples/index_structs/struct_indices/SQLIndexDemo.ipynb))
+- [SQL Demo 2 (Context)](../examples/index_structs/struct_indices/SQLIndexDemo-Context.ipynb) ([Notebook](https://github.com/jerryjliu/llama_index/blob/main/docs/examples/index_structs/struct_indices/SQLIndexDemo-Context.ipynb))
+- [SQL Demo 3 (Big tables)](../examples/index_structs/struct_indices//SQLIndexDemo-ManyTables.ipynb) ([Notebook](https://github.com/jerryjliu/llama_index/blob/main/docs/examples/index_structs/struct_indices/SQLIndexDemo-ManyTables.ipynb))
+- [Pandas Demo](../examples/index_structs/struct_indices/PandasIndexDemo.ipynb) ([Notebook](https://github.com/jerryjliu/llama_index/blob/main/docs/examples/index_structs/struct_indices/PandasIndexDemo.ipynb))
 
 
 ### Synthesis over Heterogeneous Data
@@ -62,63 +71,73 @@ Specifically, compose a list index over your subindices. A list index inherently
 it can synthesize information across your heterogeneous data sources.
 
 ```python
-from llama_index import GPTSimpleVectorIndex, GPTListIndex
+from llama_index import GPTVectorStoreIndex, GPTListIndex
 from llama_index.indices.composability import ComposableGraph
 
-index1 = GPTSimpleVectorIndex.from_documents(notion_docs)
-index2 = GPTSimpleVectorIndex.from_documents(slack_docs)
+index1 = GPTVectorStoreIndex.from_documents(notion_docs)
+index2 = GPTVectorStoreIndex.from_documents(slack_docs)
 
 graph = ComposableGraph.from_indices(GPTListIndex, [index1, index2], index_summaries=["summary1", "summary2"])
-response = graph.query("<query_str>", mode="recursive", query_configs=...)
+query_engine = graph.as_query_engine()
+response = query_engine.query("<query_str>")
 
 ```
 
 Here are some relevant resources:
 - [Composability](/how_to/index_structs/composability.md)
-- [City Analysis Demo](https://github.com/jerryjliu/llama_index/blob/main/examples/composable_indices/city_analysis/PineconeDemo-CityAnalysis.ipynb).
+- [City Analysis](../examples/composable_indices/city_analysis/PineconeDemo-CityAnalysis.ipynb) ([Notebook](https://github.com/jerryjliu/llama_index/blob/main/docs/examples/composable_indices/city_analysis/PineconeDemo-CityAnalysis.ipynb))
 
 
 
 ### Routing over Heterogeneous Data
 
-LlamaIndex also supports routing over heterogeneous data sources - for instance, if you want to "route" a query to an 
-underlying Document or a subindex.
-Here you have three options: `GPTTreeIndex`, `GPTKeywordTableIndex`, or a
-[Vector Store Index](vector-store-index).
+LlamaIndex also supports routing over heterogeneous data sources with `RouterQueryEngine` - for instance, if you want to "route" a query to an 
+underlying Document or a sub-index.
 
-A `GPTTreeIndex` uses the LLM to select the child node(s) to send the query down to.
-A `GPTKeywordTableIndex` uses keyword matching, and a `GPTVectorStoreIndex` uses
-embedding cosine similarity.
+
+To do this, first build the sub-indices over different data sources.
+Then construct the corresponding query engines, and give each query engine a description to obtain a `QueryEngineTool`.
 
 ```python
-from llama_index import GPTTreeIndex, GPTSimpleVectorIndex
-from llama_index.indices.composability import ComposableGraph
+from llama_index import GPTTreeIndex, GPTVectorStoreIndex
+from llama_index.tools import QueryEngineTool
 
 ...
 
-# subindices
-index1 = GPTSimpleVectorIndex.from_documents(notion_docs)
-index2 = GPTSimpleVectorIndex.from_documents(slack_docs)
+# define sub-indices
+index1 = GPTVectorStoreIndex.from_documents(notion_docs)
+index2 = GPTVectorStoreIndex.from_documents(slack_docs)
 
-# tree index for routing
-tree_index = ComposableGraph.from_indices(
-    GPTTreeIndex, 
-    [index1, index2],
-    index_summaries=["summary1", "summary2"]
+# define query engines and tools
+tool1 = QueryEngineTool.from_defaults(
+    query_engine=index1.as_query_engine(), 
+    description="Use this query engine to do...",
+)
+tool2 = QueryEngineTool.from_defaults(
+    query_engine=index2.as_query_engine(), 
+    description="Use this query engine for something else...",
+)
+```
+
+Then, we define a `RouterQueryEngine` over them.
+By default, this uses a `LLMSingleSelector` as the router, which uses the LLM to choose the best sub-index to router the query to, given the descriptions.
+
+```python
+from llama_index.query_engine import RouterQueryEngine
+
+query_engine = RouterQueryEngine.from_defaults(
+    query_engine_tools=[tool1, tool2]
 )
 
-response = tree_index.query(
-    "In Notion, give me a summary of the product roadmap.",
-    mode="recursive",
-    query_configs=...
+response = query_engine.query(
+    "In Notion, give me a summary of the product roadmap."
 )
 
 ```
 
 Here are some relevant resources:
-- [Composability](/how_to/index_structs/composability.md)
-- [Composable Keyword Table Graph](https://github.com/jerryjliu/llama_index/blob/main/examples/composable_indices/ComposableIndices.ipynb).
-
+- [Router Query Engine Notebook](https://github.com/jerryjliu/llama_index/blob/main/docs/examples/query_engine/RouterQueryEngine.ipynb).
+- [City Analysis Unified Query Interface](../examples/composable_indices/city_analysis/City_Analysis-Unified-Query.ipynb) ([Notebook](https://github.com/jerryjliu/llama_index/blob/main/docs/examples/composable_indices/city_analysis/PineconeDemo-CityAnalysis.ipynb))
 
 
 ### Compare/Contrast Queries
@@ -138,7 +157,7 @@ Here are some relevant resources:
 You can also perform compare/contrast queries with a **query transformation** module.
 
 ```python
-from gpt_index.indices.query.query_transform.base import DecomposeQueryTransform
+from llama_index.indices.query.query_transform.base import DecomposeQueryTransform
 decompose_transform = DecomposeQueryTransform(
     llm_predictor_chatgpt, verbose=True
 )
@@ -148,8 +167,7 @@ This module will help break down a complex query into a simpler one over your ex
 
 Here are some relevant resources:
 - [Query Transformations](/how_to/query/query_transformations.md)
-- [City Analysis Example Notebook](https://github.com/jerryjliu/llama_index/blob/main/examples/composable_indices/city_analysis/City_Analysis-Decompose.ipynb)
-
+- [City Analysis Compare/Contrast Example](../examples//composable_indices/city_analysis/City_Analysis-Decompose.ipynb) ([Notebook](https://github.com/jerryjliu/llama_index/blob/main/docs/examples/composable_indices/city_analysis/City_Analysis-Decompose.ipynb))
 
 ### Multi-Step Queries
 
@@ -161,7 +179,7 @@ query the index, and then ask followup questions.
 
 Here are some relevant resources:
 - [Query Transformations](/how_to/query/query_transformations.md)
-- [Multi-Step Query Decomposition Notebook](https://github.com/jerryjliu/llama_index/blob/main/examples/vector_indices/SimpleIndexDemo-multistep.ipynb)
+- [Multi-Step Query Decomposition](../examples/query_transformations/HyDEQueryTransformDemo.ipynb) ([Notebook](https://github.com/jerryjliu/llama_index/blob/main/docs/examples/query_transformations/HyDEQueryTransformDemo.ipynb))
 
 
 
