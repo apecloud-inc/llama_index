@@ -43,3 +43,6 @@ class PromptType(str, Enum):
 
     # custom (by default)
     CUSTOM = "custom"
+
+    # clusterdefinition
+    CLUSTER_DEFINITION = "cluster_definition"
