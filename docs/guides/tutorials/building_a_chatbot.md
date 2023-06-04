@@ -55,7 +55,7 @@ We build each index and save it to disk.
 
 ```python
 # initialize simple vector indices + global vector index
-service_context = ServiceContext.from_defaults(chunk_size_limit=512)
+service_context = ServiceContext.from_defaults(chunk_size=512)
 index_set = {}
 for year in years:
     storage_context = StorageContext.from_defaults()
@@ -129,9 +129,7 @@ LlamaIndex provides some wrappers around indices and graphs so that they can be 
 
 ```python
 # do imports
-from langchain.agents import Tool
 from langchain.chains.conversation.memory import ConversationBufferMemory
-from langchain.chat_models import ChatOpenAI
 from langchain.agents import initialize_agent
 
 from llama_index.langchain_helpers.agents import LlamaToolkit, create_llama_chat_agent, IndexToolConfig

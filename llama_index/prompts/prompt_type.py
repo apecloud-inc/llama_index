@@ -49,6 +49,21 @@ class PromptType(str, Enum):
 
     VECTOR_STORE_QUERY = "vector_store_query"
 
+    # Sub question prompt
+    SUB_QUESTION = "sub_question"
+
+    # SQL response synthesis prompt
+    SQL_RESPONSE_SYNTHESIS = "sql_response_synthesis"
+
+    # Conversation
+    CONVERSATION = "conversation"
+
+    # Decompose query transform
+    DECOMPOSE = "decompose"
+
+    # Choice select
+    CHOICE_SELECT = "choice_select"
+
     # custom (by default)
     CUSTOM = "custom"
 

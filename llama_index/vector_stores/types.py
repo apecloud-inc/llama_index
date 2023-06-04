@@ -1,10 +1,9 @@
 """Vector store index types."""
-
-
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any, List, Optional, Protocol, Union, runtime_checkable
 
+import fsspec
 from pydantic import BaseModel
 
 from llama_index.data_structs.node import Node
@@ -144,13 +143,16 @@ class VectorStore(Protocol):
         """Add embedding results to vector store."""
         ...
 
-    def delete(self, doc_id: str, **delete_kwargs: Any) -> None:
-        """Delete doc."""
+    def delete(self, ref_doc_id: str, **delete_kwargs: Any) -> None:
+        """
+        Delete nodes using with ref_doc_id."""
         ...
 
     def query(self, query: VectorStoreQuery, **kwargs: Any) -> VectorStoreQueryResult:
         """Query vector store."""
         ...
 
-    def persist(self, persist_path: str) -> None:
+    def persist(
+        self, persist_path: str, fs: Optional[fsspec.AbstractFileSystem] = None
+    ) -> None:
         return None
