@@ -37,7 +37,7 @@ Some of these core modules are shown below along with example tutorials (not com
 
 
 **Query Transformations**
-- [How-To](/how_to/query/query_transformations.md)
+- [How-To](/how_to/query_engine/advanced/query_transformations.md)
 - [Multi-Step Query Decomposition](/examples/query_transformations/HyDEQueryTransformDemo.ipynb) ([Notebook](https://github.com/jerryjliu/llama_index/blob/main/docs/examples/query_transformations/HyDEQueryTransformDemo.ipynb))
 
 **Routing**
@@ -45,7 +45,7 @@ Some of these core modules are shown below along with example tutorials (not com
 - [Router Query Engine Guide](/examples/query_engine/RouterQueryEngine.ipynb) ([Notebook](https://github.com/jerryjliu/llama_index/blob/main/docs/examples/query_engine/RouterQueryEngine.ipynb))
 
 **LLM Reranking**
-- [Second Stage Processing How-To](/how_to/query/second_stage.md)
+- [Second Stage Processing How-To](/how_to/query_engine/advanced/second_stage.md)
 - [LLM Reranking Guide (Great Gatsby)](/examples/node_postprocessor/LLMReranker-Gatsby.ipynb)
 
 **Chat Engines**
@@ -64,6 +64,7 @@ LlamaIndex query engines can be easily packaged as Tools to be used within a Lan
 **Resources**
 - [LangChain integration guide](/how_to/integrations/using_with_langchain.md)
 - [Building a Chatbot Tutorial (LangChain + LlamaIndex)](/guides/tutorials/building_a_chatbot.md)
+- [OnDemandLoaderTool Tutorial](/examples/tools/OnDemandLoaderTool.ipynb)
 
 #### ChatGPT
 

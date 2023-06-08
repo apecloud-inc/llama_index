@@ -15,12 +15,12 @@ from llama_index.storage.storage_context import StorageContext
 from llama_index.token_counter.token_counter import llm_token_counter
 
 IS = TypeVar("IS", bound=IndexStruct)
-IndexType = TypeVar("IndexType", bound="BaseGPTIndex")
+IndexType = TypeVar("IndexType", bound="BaseIndex")
 
 logger = logging.getLogger(__name__)
 
 
-class BaseGPTIndex(Generic[IS], ABC):
+class BaseIndex(Generic[IS], ABC):
     """Base LlamaIndex.
 
     Args:
@@ -60,6 +60,7 @@ class BaseGPTIndex(Generic[IS], ABC):
         self._storage_context = storage_context or StorageContext.from_defaults()
         self._docstore = self._storage_context.docstore
         self._vector_store = self._storage_context.vector_store
+        self._graph_store = self._storage_context.graph_store
 
         with self._service_context.callback_manager.as_trace("index_construction"):
             if index_struct is None:
@@ -248,7 +249,7 @@ class BaseGPTIndex(Generic[IS], ABC):
         This is equivalent to deleting the document and then inserting it again.
 
         Args:
-            document (Union[BaseDocument, BaseGPTIndex]): document to update
+            document (Union[BaseDocument, BaseIndex]): document to update
             insert_kwargs (Dict): kwargs to pass to insert
             delete_kwargs (Dict): kwargs to pass to delete
 
@@ -265,7 +266,7 @@ class BaseGPTIndex(Generic[IS], ABC):
         This is equivalent to deleting the document and then inserting it again.
 
         Args:
-            document (Union[BaseDocument, BaseGPTIndex]): document to update
+            document (Union[BaseDocument, BaseIndex]): document to update
             insert_kwargs (Dict): kwargs to pass to insert
             delete_kwargs (Dict): kwargs to pass to delete
 
@@ -359,3 +360,7 @@ class BaseGPTIndex(Generic[IS], ABC):
             )
         else:
             raise ValueError(f"Unknown chat mode: {chat_mode}")
+
+
+# legacy
+BaseGPTIndex = BaseIndex

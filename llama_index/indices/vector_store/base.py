@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 from llama_index.async_utils import run_async_tasks
 from llama_index.data_structs.data_structs import IndexDict
 from llama_index.data_structs.node import ImageNode, IndexNode, Node
-from llama_index.indices.base import BaseGPTIndex
+from llama_index.indices.base import BaseIndex
 from llama_index.indices.base_retriever import BaseRetriever
 from llama_index.indices.service_context import ServiceContext
 from llama_index.storage.docstore.types import RefDocInfo
@@ -18,8 +18,8 @@ from llama_index.token_counter.token_counter import llm_token_counter
 from llama_index.vector_stores.types import NodeWithEmbedding, VectorStore
 
 
-class GPTVectorStoreIndex(BaseGPTIndex[IndexDict]):
-    """Base GPT Vector Store Index.
+class VectorStoreIndex(BaseIndex[IndexDict]):
+    """Vector Store Index.
 
     Args:
         use_async (bool): Whether to use asynchronous calls. Defaults to False.
@@ -48,6 +48,23 @@ class GPTVectorStoreIndex(BaseGPTIndex[IndexDict]):
             service_context=service_context,
             storage_context=storage_context,
             **kwargs,
+        )
+
+    @classmethod
+    def from_vector_store(
+        cls,
+        vector_store: VectorStore,
+        service_context: Optional[ServiceContext] = None,
+        **kwargs: Any,
+    ) -> "VectorStoreIndex":
+        if not vector_store.stores_text:
+            raise ValueError(
+                "Cannot initialize from a vector store that does not store text."
+            )
+
+        storage_context = StorageContext.from_defaults(vector_store=vector_store)
+        return cls(
+            nodes=[], service_context=service_context, storage_context=storage_context
         )
 
     @property
@@ -200,8 +217,8 @@ class GPTVectorStoreIndex(BaseGPTIndex[IndexDict]):
     def build_index_from_nodes(self, nodes: Sequence[Node]) -> IndexDict:
         """Build the index from nodes.
 
-        NOTE: Overrides BaseGPTIndex.build_index_from_nodes.
-            GPTVectorStoreIndex only stores nodes in document store
+        NOTE: Overrides BaseIndex.build_index_from_nodes.
+            VectorStoreIndex only stores nodes in document store
             if vector store does not store text
         """
         return self._build_index_from_nodes(nodes)
@@ -214,8 +231,8 @@ class GPTVectorStoreIndex(BaseGPTIndex[IndexDict]):
     def insert_nodes(self, nodes: Sequence[Node], **insert_kwargs: Any) -> None:
         """Insert nodes.
 
-        NOTE: overrides BaseGPTIndex.insert_nodes.
-            GPTVectorStoreIndex only stores nodes in document store
+        NOTE: overrides BaseIndex.insert_nodes.
+            VectorStoreIndex only stores nodes in document store
             if vector store does not store text
         """
         self._insert(nodes, **insert_kwargs)
@@ -286,3 +303,6 @@ class GPTVectorStoreIndex(BaseGPTIndex[IndexDict]):
                 "Vector store integrations that store text in the vector store are "
                 "not supported by ref_doc_info yet."
             )
+
+
+GPTVectorStoreIndex = VectorStoreIndex
