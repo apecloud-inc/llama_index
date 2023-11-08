@@ -4,7 +4,6 @@ from abc import abstractmethod
 from collections import defaultdict
 from typing import Any, Dict, List, Optional
 
-from llama_index.data_structs.node import NodeWithScore
 from llama_index.indices.base_retriever import BaseRetriever
 from llama_index.indices.keyword_table.base import BaseKeywordTableIndex
 from llama_index.indices.keyword_table.utils import (
@@ -13,11 +12,12 @@ from llama_index.indices.keyword_table.utils import (
     simple_extract_keywords,
 )
 from llama_index.indices.query.schema import QueryBundle
+from llama_index.prompts import BasePromptTemplate
 from llama_index.prompts.default_prompts import (
     DEFAULT_KEYWORD_EXTRACT_TEMPLATE,
     DEFAULT_QUERY_KEYWORD_EXTRACT_TEMPLATE,
 )
-from llama_index.prompts.prompts import KeywordExtractPrompt, QueryKeywordExtractPrompt
+from llama_index.schema import NodeWithScore
 from llama_index.utils import truncate_text
 
 DQKET = DEFAULT_QUERY_KEYWORD_EXTRACT_TEMPLATE
@@ -31,15 +31,15 @@ class BaseKeywordTableRetriever(BaseRetriever):
     Arguments are shared among subclasses.
 
     Args:
-        keyword_extract_template (Optional[KeywordExtractPrompt]): A Keyword
+        keyword_extract_template (Optional[BasePromptTemplate]): A Keyword
             Extraction Prompt
             (see :ref:`Prompt-Templates`).
-        query_keyword_extract_template (Optional[QueryKeywordExtractPrompt]): A Query
+        query_keyword_extract_template (Optional[BasePromptTemplate]): A Query
             Keyword Extraction
             Prompt (see :ref:`Prompt-Templates`).
-        refine_template (Optional[RefinePrompt]): A Refinement Prompt
+        refine_template (Optional[BasePromptTemplate]): A Refinement Prompt
             (see :ref:`Prompt-Templates`).
-        text_qa_template (Optional[QuestionAnswerPrompt]): A Question Answering Prompt
+        text_qa_template (Optional[BasePromptTemplate]): A Question Answering Prompt
             (see :ref:`Prompt-Templates`).
         max_keywords_per_query (int): Maximum number of keywords to extract from query.
         num_chunks_per_query (int): Maximum number of text chunks to query.
@@ -49,8 +49,8 @@ class BaseKeywordTableRetriever(BaseRetriever):
     def __init__(
         self,
         index: BaseKeywordTableIndex,
-        keyword_extract_template: Optional[KeywordExtractPrompt] = None,
-        query_keyword_extract_template: Optional[QueryKeywordExtractPrompt] = None,
+        keyword_extract_template: Optional[BasePromptTemplate] = None,
+        query_keyword_extract_template: Optional[BasePromptTemplate] = None,
         max_keywords_per_query: int = 10,
         num_chunks_per_query: int = 10,
         **kwargs: Any,
@@ -89,7 +89,7 @@ class BaseKeywordTableRetriever(BaseRetriever):
             for node_id in self._index_struct.table[k]:
                 chunk_indices_count[node_id] += 1
         sorted_chunk_indices = sorted(
-            list(chunk_indices_count.keys()),
+            chunk_indices_count.keys(),
             key=lambda x: chunk_indices_count[x],
             reverse=True,
         )
@@ -100,11 +100,9 @@ class BaseKeywordTableRetriever(BaseRetriever):
             for chunk_idx, node in zip(sorted_chunk_indices, sorted_nodes):
                 logger.debug(
                     f"> Querying with idx: {chunk_idx}: "
-                    f"{truncate_text(node.get_text(), 50)}"
+                    f"{truncate_text(node.get_content(), 50)}"
                 )
-        sorted_nodes_with_scores = [NodeWithScore(node) for node in sorted_nodes]
-
-        return sorted_nodes_with_scores
+        return [NodeWithScore(node=node) for node in sorted_nodes]
 
 
 class KeywordTableGPTRetriever(BaseKeywordTableRetriever):
@@ -118,7 +116,7 @@ class KeywordTableGPTRetriever(BaseKeywordTableRetriever):
 
     def _get_keywords(self, query_str: str) -> List[str]:
         """Extract keywords."""
-        response, formatted_prompt = self._service_context.llm_predictor.predict(
+        response = self._service_context.llm_predictor.predict(
             self.query_keyword_extract_template,
             max_keywords=self.max_keywords_per_query,
             question=query_str,

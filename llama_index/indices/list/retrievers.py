@@ -1,10 +1,9 @@
-"""Retrievers for ListIndex."""
+"""Retrievers for SummaryIndex."""
 import logging
 from typing import Any, Callable, List, Optional, Tuple
 
-from llama_index.data_structs.node import Node, NodeWithScore
 from llama_index.indices.base_retriever import BaseRetriever
-from llama_index.indices.list.base import ListIndex
+from llama_index.indices.list.base import SummaryIndex
 from llama_index.indices.query.embedding_utils import get_top_k_embeddings
 from llama_index.indices.query.schema import QueryBundle
 from llama_index.indices.service_context import ServiceContext
@@ -12,23 +11,24 @@ from llama_index.indices.utils import (
     default_format_node_batch_fn,
     default_parse_choice_select_answer_fn,
 )
-from llama_index.prompts.choice_select import (
+from llama_index.prompts import PromptTemplate
+from llama_index.prompts.default_prompts import (
     DEFAULT_CHOICE_SELECT_PROMPT,
-    ChoiceSelectPrompt,
 )
+from llama_index.schema import BaseNode, MetadataMode, NodeWithScore
 
 logger = logging.getLogger(__name__)
 
 
-class ListIndexRetriever(BaseRetriever):
-    """Simple retriever for ListIndex that returns all nodes.
+class SummaryIndexRetriever(BaseRetriever):
+    """Simple retriever for SummaryIndex that returns all nodes.
 
     Args:
-        index (ListIndex): The index to retrieve from.
+        index (SummaryIndex): The index to retrieve from.
 
     """
 
-    def __init__(self, index: ListIndex, **kwargs: Any) -> None:
+    def __init__(self, index: SummaryIndex, **kwargs: Any) -> None:
         self._index = index
 
     def _retrieve(
@@ -40,24 +40,24 @@ class ListIndexRetriever(BaseRetriever):
 
         node_ids = self._index.index_struct.nodes
         nodes = self._index.docstore.get_nodes(node_ids)
-        return [NodeWithScore(node) for node in nodes]
+        return [NodeWithScore(node=node) for node in nodes]
 
 
-class ListIndexEmbeddingRetriever(BaseRetriever):
-    """Embedding based retriever for ListIndex.
+class SummaryIndexEmbeddingRetriever(BaseRetriever):
+    """Embedding based retriever for SummaryIndex.
 
     Generates embeddings in a lazy fashion for all
     nodes that are traversed.
 
     Args:
-        index (ListIndex): The index to retrieve from.
+        index (SummaryIndex): The index to retrieve from.
         similarity_top_k (Optional[int]): The number of top nodes to return.
 
     """
 
     def __init__(
         self,
-        index: ListIndex,
+        index: SummaryIndex,
         similarity_top_k: Optional[int] = 1,
         **kwargs: Any,
     ) -> None:
@@ -85,15 +85,15 @@ class ListIndexEmbeddingRetriever(BaseRetriever):
 
         node_with_scores = []
         for node, similarity in zip(top_k_nodes, top_similarities):
-            node_with_scores.append(NodeWithScore(node, score=similarity))
+            node_with_scores.append(NodeWithScore(node=node, score=similarity))
 
         logger.debug(f"> Top {len(top_idxs)} nodes:\n")
         nl = "\n"
-        logger.debug(f"{ nl.join([n.get_text() for n in top_k_nodes]) }")
+        logger.debug(f"{ nl.join([n.get_content() for n in top_k_nodes]) }")
         return node_with_scores
 
     def _get_embeddings(
-        self, query_bundle: QueryBundle, nodes: List[Node]
+        self, query_bundle: QueryBundle, nodes: List[BaseNode]
     ) -> Tuple[List[float], List[List[float]]]:
         """Get top nodes by similarity to the query."""
         if query_bundle.embedding is None:
@@ -110,7 +110,7 @@ class ListIndexEmbeddingRetriever(BaseRetriever):
                 nodes_embedded += 1
                 node.embedding = (
                     self._index.service_context.embed_model.get_text_embedding(
-                        node.get_text()
+                        node.get_content(metadata_mode=MetadataMode.EMBED)
                     )
                 )
 
@@ -118,12 +118,12 @@ class ListIndexEmbeddingRetriever(BaseRetriever):
         return query_bundle.embedding, node_embeddings
 
 
-class ListIndexLLMRetriever(BaseRetriever):
-    """LLM retriever for ListIndex.
+class SummaryIndexLLMRetriever(BaseRetriever):
+    """LLM retriever for SummaryIndex.
 
     Args:
-        index (ListIndex): The index to retrieve from.
-        choice_select_prompt (Optional[ChoiceSelectPrompt]): A Choice-Select Prompt
+        index (SummaryIndex): The index to retrieve from.
+        choice_select_prompt (Optional[PromptTemplate]): A Choice-Select Prompt
            (see :ref:`Prompt-Templates`).)
         choice_batch_size (int): The number of nodes to query at a time.
         format_node_batch_fn (Optional[Callable]): A function that formats a
@@ -136,8 +136,8 @@ class ListIndexLLMRetriever(BaseRetriever):
 
     def __init__(
         self,
-        index: ListIndex,
-        choice_select_prompt: Optional[ChoiceSelectPrompt] = None,
+        index: SummaryIndex,
+        choice_select_prompt: Optional[PromptTemplate] = None,
         choice_batch_size: int = 10,
         format_node_batch_fn: Optional[Callable] = None,
         parse_choice_select_answer_fn: Optional[Callable] = None,
@@ -168,7 +168,7 @@ class ListIndexLLMRetriever(BaseRetriever):
             query_str = query_bundle.query_str
             fmt_batch_str = self._format_node_batch_fn(nodes_batch)
             # call each batch independently
-            raw_response, _ = self._service_context.llm_predictor.predict(
+            raw_response = self._service_context.llm_predictor.predict(
                 self._choice_select_prompt,
                 context_str=fmt_batch_str,
                 query_str=query_str,
@@ -184,8 +184,14 @@ class ListIndexLLMRetriever(BaseRetriever):
             relevances = relevances or [1.0 for _ in choice_nodes]
             results.extend(
                 [
-                    NodeWithScore(node, score=relevance)
+                    NodeWithScore(node=node, score=relevance)
                     for node, relevance in zip(choice_nodes, relevances)
                 ]
             )
         return results
+
+
+# for backwards compatibility
+ListIndexEmbeddingRetriever = SummaryIndexEmbeddingRetriever
+ListIndexLLMRetriever = SummaryIndexLLMRetriever
+ListIndexRetriever = SummaryIndexRetriever

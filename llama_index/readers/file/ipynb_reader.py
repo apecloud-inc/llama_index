@@ -3,7 +3,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from llama_index.readers.base import BaseReader
-from llama_index.readers.schema.base import Document
+from llama_index.schema import Document
 
 
 class IPYNBReader(BaseReader):
@@ -22,10 +22,9 @@ class IPYNBReader(BaseReader):
         self, file: Path, extra_info: Optional[Dict] = None
     ) -> List[Document]:
         """Parse file."""
-
         if file.name.endswith(".ipynb"):
             try:
-                import nbconvert  # noqa: F401
+                import nbconvert
             except ImportError:
                 raise ImportError("Please install nbconvert 'pip install nbconvert' ")
         string = nbconvert.exporters.ScriptExporter().from_file(file)[0]
@@ -35,7 +34,7 @@ class IPYNBReader(BaseReader):
         splits.pop(0)
 
         if self._concatenate:
-            docs = [Document(text="\n\n".join(splits), extra_info=extra_info)]
+            docs = [Document(text="\n\n".join(splits), metadata=extra_info or {})]
         else:
-            docs = [Document(text=s, extra_info=extra_info) for s in splits]
+            docs = [Document(text=s, metadata=extra_info or {}) for s in splits]
         return docs

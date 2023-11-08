@@ -5,10 +5,15 @@ An index that is built on top of Alibaba Cloud's Tair database.
 import logging
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
-from llama_index.data_structs.node import DocumentRelationship, Node
+from llama_index.schema import (
+    BaseNode,
+    MetadataMode,
+    NodeRelationship,
+    RelatedNodeInfo,
+    TextNode,
+)
 from llama_index.vector_stores.types import (
     MetadataFilters,
-    NodeWithEmbedding,
     VectorStore,
     VectorStoreQuery,
     VectorStoreQueryResult,
@@ -26,15 +31,16 @@ def _to_filter_expr(filters: MetadataFilters) -> str:
     conditions = []
     for f in filters.filters:
         value = str(f.value)
-        if type(f.value) == str:
+        if isinstance(f.value, str):
             value = '"' + value + '"'
-        conditions.append("%s==%s" % (f.key, value))
+        conditions.append(f"{f.key}=={value}")
     return "&&".join(conditions)
 
 
 class TairVectorStore(VectorStore):
     stores_text = True
     stores_node = True
+    flat_metadata = False
 
     def __init__(
         self,
@@ -83,7 +89,7 @@ class TairVectorStore(VectorStore):
 
         """
         try:
-            from tair import Tair, tairvector  # noqa: F401
+            from tair import Tair, tairvector  # noqa
         except ImportError:
             raise ValueError(
                 "Could not import tair-py python package. "
@@ -116,25 +122,24 @@ class TairVectorStore(VectorStore):
 
     @property
     def client(self) -> "Tair":
-        """Return the Tair client instance"""
+        """Return the Tair client instance."""
         return self._tair_client
 
-    def add(self, embedding_results: List[NodeWithEmbedding]) -> List[str]:
-        """Add embedding results to the index.
+    def add(self, nodes: List[BaseNode], **add_kwargs: Any) -> List[str]:
+        """Add nodes to the index.
 
         Args:
-            embedding_results (List[NodeWithEmbedding]): List of embedding results to
-                add to the index.
+            nodes (List[BaseNode]): List of nodes with embeddings
 
         Returns:
             List[str]: List of ids of the documents added to the index.
         """
         # check to see if empty document list was passed
-        if len(embedding_results) == 0:
+        if len(nodes) == 0:
             return []
 
         # set vector dim for creation if index doesn't exist
-        self.dim = len(embedding_results[0].embedding)
+        self.dim = len(nodes[0].get_embedding())
 
         if self._index_exists():
             if self._overwrite:
@@ -146,20 +151,22 @@ class TairVectorStore(VectorStore):
             self._create_index()
 
         ids = []
-        for result in embedding_results:
+        for node in nodes:
             attributes = {
-                "id": result.id,
-                "doc_id": result.ref_doc_id,
-                "text": result.node.get_text(),
+                "id": node.node_id,
+                "doc_id": node.ref_doc_id,
+                "text": node.get_content(metadata_mode=MetadataMode.NONE),
             }
-            metadata_dict = node_to_metadata_dict(result.node)
+            metadata_dict = node_to_metadata_dict(
+                node, remove_text=True, flat_metadata=self.flat_metadata
+            )
             attributes.update(metadata_dict)
 
-            ids.append(result.id)
+            ids.append(node.node_id)
             self._tair_client.tvs_hset(
                 self._index_name,
-                "%s#%s" % (result.ref_doc_id, result.id),
-                vector=result.embedding,
+                f"{node.ref_doc_id}#{node.node_id}",
+                vector=node.get_embedding(),
                 is_binary=False,
                 **attributes,
             )
@@ -227,12 +234,15 @@ class TairVectorStore(VectorStore):
             pipe.tvs_hmget(self._index_name, key, "id", "doc_id", "text")
         metadatas = pipe.execute()
         for i, m in enumerate(metadatas):
+            # TODO: properly get the _node_conent
             doc_id = m[0].decode()
-            node = Node(
+            node = TextNode(
                 text=m[2].decode(),
-                doc_id=doc_id,
+                id_=doc_id,
                 embedding=None,
-                relationships={DocumentRelationship.SOURCE: m[1].decode()},
+                relationships={
+                    NodeRelationship.SOURCE: RelatedNodeInfo(node_id=m[1].decode())
+                },
             )
             ids.append(doc_id)
             nodes.append(node)
@@ -242,7 +252,7 @@ class TairVectorStore(VectorStore):
 
     def _create_index(self) -> None:
         try:
-            from tair import tairvector  # noqa: F401
+            from tair import tairvector
         except ImportError:
             raise ValueError(
                 "Could not import tair-py python package. "

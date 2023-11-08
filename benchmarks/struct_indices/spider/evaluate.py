@@ -6,13 +6,13 @@ import logging
 import os
 from typing import Dict, List, Optional
 
-from langchain.chat_models import ChatOpenAI
-from langchain.schema import HumanMessage
-from llama_index.response.schema import Response
 from spider_utils import create_indexes, load_examples
 from tqdm import tqdm
 
-from llama_index.indices.struct_store.sql import SQLStructStoreIndex, SQLQueryMode
+from llama_index.indices.struct_store.sql import SQLQueryMode, SQLStructStoreIndex
+from llama_index.llms.base import ChatMessage, MessageRole
+from llama_index.llms.openai import OpenAI
+from llama_index.response.schema import Response
 
 logging.getLogger("root").setLevel(logging.WARNING)
 
@@ -45,29 +45,30 @@ HypothesisAnswerCorrect: """
 
 
 def _answer(
-    llm: ChatOpenAI, question: str, sql_query: str, sql_result: Optional[str]
+    llm: OpenAI, question: str, sql_query: str, sql_result: Optional[str]
 ) -> str:
     prompt = answer_template.format(
         question=question, sql_query=sql_query, sql_result=sql_result
     )
-    response = llm([HumanMessage(content=prompt)])
-    return response.content
+    response = llm.chat([ChatMessage(role=MessageRole.USER, content=prompt)])
+    return response.message.content or ""
 
 
 def _match(
-    llm: ChatOpenAI, question: str, reference_answer: str, hypothesis_answer: str
+    llm: OpenAI, question: str, reference_answer: str, hypothesis_answer: str
 ) -> bool:
     prompt = match_template.format(
         question=question,
         reference_answer=reference_answer,
         hypothesis_answer=hypothesis_answer,
     )
-    response = llm([HumanMessage(content=prompt)])
-    return "true" in response.content.lower()
+    response = llm.chat([ChatMessage(role=MessageRole.USER, content=prompt)])
+    content = response.message.content or ""
+    return "true" in content.lower()
 
 
 def _get_answers(
-    llm: ChatOpenAI,
+    llm: OpenAI,
     indexes: Dict[str, SQLStructStoreIndex],
     db_names: List[str],
     sql_queries: List[str],
@@ -76,7 +77,7 @@ def _get_answers(
     use_cache: bool,
 ) -> List[dict]:
     if use_cache and os.path.exists(output_filename):
-        with open(output_filename, "r") as f:
+        with open(output_filename) as f:
             return json.load(f)
 
     results = []
@@ -112,7 +113,7 @@ def _get_answers(
 
 
 def _match_answers(
-    llm: ChatOpenAI,
+    llm: OpenAI,
     gold_results: List[dict],
     pred_results: List[dict],
     examples: List[dict],
@@ -212,15 +213,15 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     # Create the LlamaIndexes for all databases.
-    llm = ChatOpenAI(model=args.model, temperature=0)
+    llm = OpenAI(model=args.model, temperature=0)
 
     # Load all examples.
     train, dev = load_examples(args.spider_dir)
 
     # Load all generated SQL queries.
-    with open(os.path.join(args.predict_dir, "train_pred.sql"), "r") as f:
+    with open(os.path.join(args.predict_dir, "train_pred.sql")) as f:
         train_pred_sqls = f.readlines()
-    with open(os.path.join(args.predict_dir, "dev_pred.sql"), "r") as f:
+    with open(os.path.join(args.predict_dir, "dev_pred.sql")) as f:
         dev_pred_sqls = f.readlines()
 
     # Load all gold SQL queries and database names.
@@ -228,12 +229,12 @@ if __name__ == "__main__":
     dev_dbs = []
     train_gold_sqls = []
     dev_gold_sqls = []
-    with open(os.path.join(args.spider_dir, "train_gold.sql"), "r") as f:
+    with open(os.path.join(args.spider_dir, "train_gold.sql")) as f:
         for line in f.readlines():
             line_tokens = line.strip().split("\t")
             train_gold_sqls.append(line_tokens[0])
             train_dbs.append(line_tokens[1])
-    with open(os.path.join(args.spider_dir, "dev_gold.sql"), "r") as f:
+    with open(os.path.join(args.spider_dir, "dev_gold.sql")) as f:
         for line in f.readlines():
             line_tokens = line.strip().split("\t")
             dev_gold_sqls.append(line_tokens[0])

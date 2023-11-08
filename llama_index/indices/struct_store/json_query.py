@@ -2,16 +2,15 @@ import json
 import logging
 from typing import Any, Callable, Dict, List, Optional, Union
 
-from langchain.input import print_text
-
 from llama_index.indices.query.base import BaseQueryEngine
 from llama_index.indices.query.schema import QueryBundle
 from llama_index.indices.service_context import ServiceContext
-from llama_index.prompts.base import Prompt
+from llama_index.prompts import BasePromptTemplate, PromptTemplate
 from llama_index.prompts.default_prompts import DEFAULT_JSON_PATH_PROMPT
+from llama_index.prompts.mixin import PromptDictType, PromptMixinType
 from llama_index.prompts.prompt_type import PromptType
 from llama_index.response.schema import Response
-from llama_index.token_counter.token_counter import llm_token_counter
+from llama_index.utils import print_text
 
 logger = logging.getLogger(__name__)
 IMPORT_ERROR_MSG = (
@@ -22,30 +21,48 @@ JSONType = Union[Dict[str, "JSONType"], List["JSONType"], str, int, float, bool,
 
 
 DEFAULT_RESPONSE_SYNTHESIS_PROMPT_TMPL = (
-    "Given an input question about a JSON value, synthesize a response "
-    "from the query results.\n"
-    "Query: {query_str}\n"
+    "Given a query, synthesize a response "
+    "to satisfy the query using the JSON results. "
+    "Only include details that are relevant to the query. "
+    "If you don't know the answer, then say that.\n"
     "JSON Schema: {json_schema}\n"
     "JSON Path: {json_path}\n"
     "Value at path: {json_path_value}\n"
+    "Query: {query_str}\n"
     "Response: "
 )
-DEFAULT_RESPONSE_SYNTHESIS_PROMPT = Prompt(
+DEFAULT_RESPONSE_SYNTHESIS_PROMPT = PromptTemplate(
     DEFAULT_RESPONSE_SYNTHESIS_PROMPT_TMPL,
     prompt_type=PromptType.SQL_RESPONSE_SYNTHESIS,
 )
 
 
 def default_output_processor(llm_output: str, json_value: JSONType) -> JSONType:
-    """Default output processor that executes the JSON Path query."""
+    """Default output processor that extracts values based on JSON Path expressions."""
+    # Split the given string into separate JSON Path expressions
+    expressions = [expr.strip() for expr in llm_output.split(",")]
+
     try:
         from jsonpath_ng.ext import parse
         from jsonpath_ng.jsonpath import DatumInContext
     except ImportError as exc:
+        IMPORT_ERROR_MSG = "You need to install jsonpath-ng to use this function!"
         raise ImportError(IMPORT_ERROR_MSG) from exc
 
-    datum: List[DatumInContext] = parse(llm_output).find(json_value)
-    return [d.value for d in datum]
+    results = {}
+
+    for expression in expressions:
+        try:
+            datum: List[DatumInContext] = parse(expression).find(json_value)
+            if datum:
+                key = expression.split(".")[
+                    -1
+                ]  # Extracting "title" from "$.title", for example
+                results[key] = datum[0].value
+        except Exception as exc:
+            raise ValueError(f"Invalid JSON Path: {expression}") from exc
+
+    return results
 
 
 class JSONQueryEngine(BaseQueryEngine):
@@ -57,7 +74,7 @@ class JSONQueryEngine(BaseQueryEngine):
         json_value (JSONType): JSON value
         json_schema (JSONType): JSON schema
         service_context (ServiceContext): ServiceContext
-        json_path_prompt (Prompt): The JSON Path prompt to use.
+        json_path_prompt (BasePromptTemplate): The JSON Path prompt to use.
         output_processor (Callable): The output processor that executes the
             JSON Path query.
         output_kwargs (dict): Additional output processor kwargs for the
@@ -70,11 +87,11 @@ class JSONQueryEngine(BaseQueryEngine):
         json_value: JSONType,
         json_schema: JSONType,
         service_context: ServiceContext,
-        json_path_prompt: Optional[Prompt] = None,
+        json_path_prompt: Optional[BasePromptTemplate] = None,
         output_processor: Optional[Callable] = None,
         output_kwargs: Optional[dict] = None,
         synthesize_response: bool = True,
-        response_synthesis_prompt: Optional[Prompt] = None,
+        response_synthesis_prompt: Optional[BasePromptTemplate] = None,
         verbose: bool = False,
         **kwargs: Any,
     ) -> None:
@@ -93,26 +110,39 @@ class JSONQueryEngine(BaseQueryEngine):
 
         super().__init__(self._service_context.callback_manager)
 
+    def _get_prompts(self) -> Dict[str, Any]:
+        """Get prompts."""
+        return {
+            "json_path_prompt": self._json_path_prompt,
+            "response_synthesis_prompt": self._response_synthesis_prompt,
+        }
+
+    def _update_prompts(self, prompts: PromptDictType) -> None:
+        """Update prompts."""
+        if "json_path_prompt" in prompts:
+            self._json_path_prompt = prompts["json_path_prompt"]
+        if "response_synthesis_prompt" in prompts:
+            self._response_synthesis_prompt = prompts["response_synthesis_prompt"]
+
+    def _get_prompt_modules(self) -> PromptMixinType:
+        """Get prompt sub-modules."""
+        return {}
+
     def _get_schema_context(self) -> str:
         """Get JSON schema context."""
         return json.dumps(self._json_schema)
 
-    @llm_token_counter("query")
     def _query(self, query_bundle: QueryBundle) -> Response:
         """Answer a query."""
         schema = self._get_schema_context()
 
-        (
-            json_path_response_str,
-            formatted_prompt,
-        ) = self._service_context.llm_predictor.predict(
+        json_path_response_str = self._service_context.llm_predictor.predict(
             self._json_path_prompt,
             schema=schema,
             query_str=query_bundle.query_str,
         )
 
         if self._verbose:
-            print_text(f"> JSONPath Prompt: {formatted_prompt}\n")
             print_text(
                 f"> JSONPath Instructions:\n" f"```\n{json_path_response_str}\n```\n"
             )
@@ -127,7 +157,7 @@ class JSONQueryEngine(BaseQueryEngine):
             print_text(f"> JSONPath Output: {json_path_output}\n")
 
         if self._synthesize_response:
-            response_str, _ = self._service_context.llm_predictor.predict(
+            response_str = self._service_context.llm_predictor.predict(
                 self._response_synthesis_prompt,
                 query_str=query_bundle.query_str,
                 json_schema=self._json_schema,
@@ -137,27 +167,22 @@ class JSONQueryEngine(BaseQueryEngine):
         else:
             response_str = json.dumps(json_path_output)
 
-        response_extra_info = {
+        response_metadata = {
             "json_path_response_str": json_path_response_str,
         }
 
-        return Response(response=response_str, extra_info=response_extra_info)
+        return Response(response=response_str, metadata=response_metadata)
 
-    @llm_token_counter("aquery")
     async def _aquery(self, query_bundle: QueryBundle) -> Response:
         schema = self._get_schema_context()
 
-        (
-            json_path_response_str,
-            formatted_prompt,
-        ) = await self._service_context.llm_predictor.apredict(
+        json_path_response_str = await self._service_context.llm_predictor.apredict(
             self._json_path_prompt,
             schema=schema,
             query_str=query_bundle.query_str,
         )
 
         if self._verbose:
-            print_text(f"> JSONPath Prompt: {formatted_prompt}\n")
             print_text(
                 f"> JSONPath Instructions:\n" f"```\n{json_path_response_str}\n```\n"
             )
@@ -172,7 +197,7 @@ class JSONQueryEngine(BaseQueryEngine):
             print_text(f"> JSONPath Output: {json_path_output}\n")
 
         if self._synthesize_response:
-            response_str, _ = await self._service_context.llm_predictor.apredict(
+            response_str = await self._service_context.llm_predictor.apredict(
                 self._response_synthesis_prompt,
                 query_str=query_bundle.query_str,
                 json_schema=self._json_schema,
@@ -182,8 +207,8 @@ class JSONQueryEngine(BaseQueryEngine):
         else:
             response_str = json.dumps(json_path_output)
 
-        response_extra_info = {
+        response_metadata = {
             "json_path_response_str": json_path_response_str,
         }
 
-        return Response(response=response_str, extra_info=response_extra_info)
+        return Response(response=response_str, metadata=response_metadata)

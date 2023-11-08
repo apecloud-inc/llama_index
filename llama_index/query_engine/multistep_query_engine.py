@@ -1,12 +1,13 @@
 from typing import Any, Callable, Dict, List, Optional, Tuple, cast
 
-from llama_index.callbacks.schema import CBEventType
-from llama_index.data_structs.node import Node, NodeWithScore
+from llama_index.callbacks.schema import CBEventType, EventPayload
 from llama_index.indices.query.base import BaseQueryEngine
 from llama_index.indices.query.query_transform.base import StepDecomposeQueryTransform
 from llama_index.indices.query.schema import QueryBundle
-from llama_index.indices.query.response_synthesis import ResponseSynthesizer
+from llama_index.prompts.mixin import PromptMixinType
 from llama_index.response.schema import RESPONSE_TYPE
+from llama_index.response_synthesizers import BaseSynthesizer, get_response_synthesizer
+from llama_index.schema import NodeWithScore, TextNode
 
 
 def default_stop_fn(stop_dict: Dict) -> bool:
@@ -15,10 +16,7 @@ def default_stop_fn(stop_dict: Dict) -> bool:
     if query_bundle is None:
         raise ValueError("Response must be provided to stop function.")
 
-    if "none" in query_bundle.query_str.lower():
-        return True
-    else:
-        return False
+    return "none" in query_bundle.query_str.lower()
 
 
 class MultiStepQueryEngine(BaseQueryEngine):
@@ -31,7 +29,7 @@ class MultiStepQueryEngine(BaseQueryEngine):
         query_engine (BaseQueryEngine): A BaseQueryEngine object.
         query_transform (StepDecomposeQueryTransform): A StepDecomposeQueryTransform
             object.
-        response_synthesizer (Optional[ResponseSynthesizer]): A ResponseSynthesizer
+        response_synthesizer (Optional[BaseSynthesizer]): A BaseSynthesizer
             object.
         num_steps (Optional[int]): Number of steps to run the multi-step query.
         early_stopping (bool): Whether to stop early if the stop function returns True.
@@ -45,7 +43,7 @@ class MultiStepQueryEngine(BaseQueryEngine):
         self,
         query_engine: BaseQueryEngine,
         query_transform: StepDecomposeQueryTransform,
-        response_synthesizer: Optional[ResponseSynthesizer] = None,
+        response_synthesizer: Optional[BaseSynthesizer] = None,
         num_steps: Optional[int] = 3,
         early_stopping: bool = True,
         index_summary: str = "None",
@@ -53,11 +51,8 @@ class MultiStepQueryEngine(BaseQueryEngine):
     ) -> None:
         self._query_engine = query_engine
         self._query_transform = query_transform
-        self._response_synthesizer = (
-            response_synthesizer
-            or ResponseSynthesizer.from_args(
-                callback_manager=self._query_engine.callback_manager
-            )
+        self._response_synthesizer = response_synthesizer or get_response_synthesizer(
+            callback_manager=self._query_engine.callback_manager
         )
 
         self._index_summary = index_summary
@@ -72,58 +67,56 @@ class MultiStepQueryEngine(BaseQueryEngine):
         callback_manager = self._query_engine.callback_manager
         super().__init__(callback_manager)
 
+    def _get_prompt_modules(self) -> PromptMixinType:
+        """Get prompt sub-modules."""
+        return {
+            "response_synthesizer": self._response_synthesizer,
+            "query_transform": self._query_transform,
+        }
+
     def _query(self, query_bundle: QueryBundle) -> RESPONSE_TYPE:
-        query_event_id = self.callback_manager.on_event_start(
-            CBEventType.QUERY, payload={"query_str": query_bundle.query_str}
-        )
-        nodes, source_nodes, extra_info = self._query_multistep(query_bundle)
+        with self.callback_manager.event(
+            CBEventType.QUERY, payload={EventPayload.QUERY_STR: query_bundle.query_str}
+        ) as query_event:
+            nodes, source_nodes, metadata = self._query_multistep(query_bundle)
 
-        final_response = self._response_synthesizer.synthesize(
-            query_bundle=query_bundle,
-            nodes=nodes,
-            additional_source_nodes=source_nodes,
-        )
-        final_response.extra_info = extra_info
+            final_response = self._response_synthesizer.synthesize(
+                query=query_bundle,
+                nodes=nodes,
+                additional_source_nodes=source_nodes,
+            )
+            final_response.metadata = metadata
 
-        self.callback_manager.on_event_end(
-            CBEventType.QUERY,
-            payload={"response": final_response},
-            event_id=query_event_id,
-        )
+            query_event.on_end(payload={EventPayload.RESPONSE: final_response})
+
         return final_response
 
     async def _aquery(self, query_bundle: QueryBundle) -> RESPONSE_TYPE:
-        event_id = self.callback_manager.on_event_start(
-            CBEventType.QUERY, payload={"query_str": query_bundle.query_str}
-        )
-        nodes, source_nodes, extra_info = self._query_multistep(query_bundle)
+        with self.callback_manager.event(
+            CBEventType.QUERY, payload={EventPayload.QUERY_STR: query_bundle.query_str}
+        ) as query_event:
+            nodes, source_nodes, metadata = self._query_multistep(query_bundle)
 
-        final_response = await self._response_synthesizer.asynthesize(
-            query_bundle=query_bundle,
-            nodes=nodes,
-            additional_source_nodes=source_nodes,
-        )
-        final_response.extra_info = extra_info
+            final_response = await self._response_synthesizer.asynthesize(
+                query=query_bundle,
+                nodes=nodes,
+                additional_source_nodes=source_nodes,
+            )
+            final_response.metadata = metadata
 
-        self.callback_manager.on_event_end(
-            CBEventType.QUERY,
-            payload={"response": final_response},
-            event_id=event_id,
-        )
+            query_event.on_end(payload={EventPayload.RESPONSE: final_response})
+
         return final_response
 
     def _combine_queries(
         self, query_bundle: QueryBundle, prev_reasoning: str
     ) -> QueryBundle:
         """Combine queries."""
-        transform_extra_info = {
+        transform_metadata = {
             "prev_reasoning": prev_reasoning,
             "index_summary": self._index_summary,
         }
-        query_bundle = self._query_transform(
-            query_bundle, extra_info=transform_extra_info
-        )
-        return query_bundle
+        return self._query_transform(query_bundle, metadata=transform_metadata)
 
     def _query_multistep(
         self, query_bundle: QueryBundle
@@ -135,7 +128,7 @@ class MultiStepQueryEngine(BaseQueryEngine):
         cur_steps = 0
 
         # use response
-        final_response_extra_info: Dict[str, Any] = {"sub_qa": []}
+        final_response_metadata: Dict[str, Any] = {"sub_qa": []}
 
         text_chunks = []
         source_nodes = []
@@ -159,20 +152,22 @@ class MultiStepQueryEngine(BaseQueryEngine):
             # append to response builder
             cur_qa_text = (
                 f"\nQuestion: {updated_query_bundle.query_str}\n"
-                f"Answer: {str(cur_response)}"
+                f"Answer: {cur_response!s}"
             )
             text_chunks.append(cur_qa_text)
             for source_node in cur_response.source_nodes:
                 source_nodes.append(source_node)
-            # update extra info
-            final_response_extra_info["sub_qa"].append(
+            # update metadata
+            final_response_metadata["sub_qa"].append(
                 (updated_query_bundle.query_str, cur_response)
             )
 
             prev_reasoning += (
-                f"- {updated_query_bundle.query_str}\n" f"- {str(cur_response)}\n"
+                f"- {updated_query_bundle.query_str}\n" f"- {cur_response!s}\n"
             )
             cur_steps += 1
 
-        nodes = [NodeWithScore(Node(text_chunk)) for text_chunk in text_chunks]
-        return nodes, source_nodes, final_response_extra_info
+        nodes = [
+            NodeWithScore(node=TextNode(text=text_chunk)) for text_chunk in text_chunks
+        ]
+        return nodes, source_nodes, final_response_metadata

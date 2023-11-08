@@ -4,7 +4,7 @@ import os
 from typing import List, Optional
 
 from llama_index.readers.base import BaseReader
-from llama_index.readers.schema.base import Document
+from llama_index.schema import Document
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +28,7 @@ class PsychicReader(BaseReader):
     def __init__(self, psychic_key: Optional[str] = None) -> None:
         """Initialize with parameters."""
         try:
-            from psychicapi import ConnectorId, Psychic  # noqa: F401
+            from psychicapi import ConnectorId, Psychic
         except ImportError:
             raise ImportError(
                 "`psychicapi` package not found, please run `pip install psychicapi`"
@@ -47,7 +47,7 @@ class PsychicReader(BaseReader):
     def load_data(
         self, connector_id: Optional[str] = None, account_id: Optional[str] = None
     ) -> List[Document]:
-        """Load data from a Psychic connection
+        """Load data from a Psychic connection.
 
         Args:
             connector_id (str): The connector ID to connect to
@@ -59,7 +59,7 @@ class PsychicReader(BaseReader):
         """
         if not connector_id or not account_id:
             raise ValueError("Must specify both `connector_id` and `account_id`.")
-        if connector_id not in self.ConnectorId.__members__.keys():
+        if connector_id not in self.ConnectorId.__members__:
             raise ValueError("Invalid connector ID.")
 
         # get all the documents in the database
@@ -71,8 +71,8 @@ class PsychicReader(BaseReader):
             docs.append(
                 Document(
                     text=text,
-                    doc_id=doc_id,
-                    extra_info={"connector_id": connector_id, "account_id": account_id},
+                    id_=doc_id,
+                    metadata={"connector_id": connector_id, "account_id": account_id},
                 )
             )
 

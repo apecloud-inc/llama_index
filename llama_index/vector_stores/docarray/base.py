@@ -3,16 +3,19 @@ from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional, Type
 
 import numpy as np
-from pydantic import Field
 
-from llama_index.data_structs.node import Node
+from llama_index.bridge.pydantic import Field
+from llama_index.schema import BaseNode, MetadataMode, TextNode
 from llama_index.vector_stores.types import (
-    NodeWithEmbedding,
     VectorStore,
     VectorStoreQuery,
     VectorStoreQueryResult,
 )
-from llama_index.vector_stores.utils import metadata_dict_to_node, node_to_metadata_dict
+from llama_index.vector_stores.utils import (
+    legacy_metadata_dict_to_node,
+    metadata_dict_to_node,
+    node_to_metadata_dict,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +34,7 @@ class DocArrayVectorStore(VectorStore, ABC):
     _ref_docs: Dict[str, List[str]]
 
     stores_text: bool = True
+    flat_metadata: bool = False
 
     def _update_ref_docs(self, docs) -> None:  # type: ignore[no-untyped-def]
         pass
@@ -41,7 +45,6 @@ class DocArrayVectorStore(VectorStore, ABC):
 
         This method should be overridden by the subclasses.
         """
-        pass
 
     @abstractmethod
     def _find_docs_to_be_removed(self, doc_id: str) -> List[str]:
@@ -55,7 +58,6 @@ class DocArrayVectorStore(VectorStore, ABC):
 
         This is an abstract method and needs to be implemented in any concrete subclass.
         """
-        pass
 
     @property
     def client(self) -> Any:
@@ -80,7 +82,6 @@ class DocArrayVectorStore(VectorStore, ABC):
         Returns:
             DocArraySchema: Schema for a DocArray index.
         """
-
         from docarray import BaseDoc
         from docarray.typing import ID, NdArray
 
@@ -94,13 +95,13 @@ class DocArrayVectorStore(VectorStore, ABC):
 
     def add(
         self,
-        embedding_results: List[NodeWithEmbedding],
+        nodes: List[BaseNode],
+        **add_kwargs: Any,
     ) -> List[str]:
-        """Adds embedding results to the vector store.
+        """Adds nodes to the vector store.
 
         Args:
-            embedding_results (List[NodeWithEmbedding]): List of nodes
-            with corresponding embeddings.
+            nodes (List[BaseNode]): List of nodes with embeddings.
 
         Returns:
             List[str]: List of document IDs added to the vector store.
@@ -108,17 +109,17 @@ class DocArrayVectorStore(VectorStore, ABC):
         from docarray import DocList
 
         # check to see if empty document list was passed
-        if len(embedding_results) == 0:
+        if len(nodes) == 0:
             return []
 
         docs = DocList[self._schema](  # type: ignore[name-defined]
             self._schema(
-                id=result.id,
-                metadata=node_to_metadata_dict(result.node),
-                text=result.node.get_text(),
-                embedding=result.embedding,
+                id=node.node_id,
+                metadata=node_to_metadata_dict(node, flat_metadata=self.flat_metadata),
+                text=node.get_content(metadata_mode=MetadataMode.NONE),
+                embedding=node.get_embedding(),
             )
-            for result in embedding_results
+            for node in nodes
         )
         self._index.index(docs)
         logger.info(f"Successfully added {len(docs)} documents to the index")
@@ -177,16 +178,24 @@ class DocArrayVectorStore(VectorStore, ABC):
             )
         nodes, ids = [], []
         for doc in docs:
-            extra_info, node_info, relationships = metadata_dict_to_node(doc.metadata)
-            nodes.append(
-                Node(
-                    doc_id=doc.id,
+            try:
+                node = metadata_dict_to_node(doc.metadata)
+                node.text = doc.text
+            except Exception:
+                # TODO: legacy metadata support
+                metadata, node_info, relationships = legacy_metadata_dict_to_node(
+                    doc.metadata
+                )
+                node = TextNode(
+                    id_=doc.id,
                     text=doc.text,
-                    extra_info=extra_info,
-                    node_info=node_info,
+                    metadata=metadata,
+                    start_char_idx=node_info.get("start", None),
+                    end_char_idx=node_info.get("end", None),
                     relationships=relationships,
                 )
-            )
+
+            nodes.append(node)
             ids.append(doc.id)
         logger.info(f"Found {len(nodes)} results for the query")
 

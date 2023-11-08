@@ -1,16 +1,19 @@
 import asyncio
 from typing import Any, Dict, Tuple
 
-from sqlalchemy import Column, Integer, MetaData, String, Table, create_engine
+import pytest
 from llama_index.indices.service_context import ServiceContext
 from llama_index.indices.struct_store.base import default_output_parser
 from llama_index.indices.struct_store.sql import SQLStructStoreIndex
 from llama_index.indices.struct_store.sql_query import (
+    NLSQLTableQueryEngine,
     NLStructStoreQueryEngine,
     SQLStructStoreQueryEngine,
 )
-from llama_index.langchain_helpers.sql_wrapper import SQLDatabase
-from llama_index.readers.schema.base import Document
+from llama_index.schema import Document
+from llama_index.utilities.sql_wrapper import SQLDatabase
+from sqlalchemy import Column, Integer, MetaData, String, Table, create_engine
+from sqlalchemy.exc import OperationalError
 
 
 def test_sql_index_query(
@@ -51,6 +54,14 @@ def test_sql_index_query(
     response = nl_query_engine.query("test_table:user_id,foo")
     assert str(response) == "[(2, 'bar'), (8, 'hello')]"
 
+    nl_table_engine = NLSQLTableQueryEngine(index.sql_database)
+    response = nl_table_engine.query("test_table:user_id,foo")
+    assert str(response) == "[(2, 'bar'), (8, 'hello')]"
+
+    with pytest.raises(NotImplementedError, match="invalid SQL") as exc_info:
+        sql_query_engine.query("LLM didn't provide SQL at all")
+    assert isinstance(exc_info.value.__cause__, OperationalError)
+
 
 def test_sql_index_async_query(
     allow_networking: Any,
@@ -90,6 +101,11 @@ def test_sql_index_async_query(
     # query the index with natural language
     nl_query_engine = NLStructStoreQueryEngine(index, **query_kwargs)
     task = nl_query_engine.aquery("test_table:user_id,foo")
+    response = asyncio.run(task)
+    assert str(response) == "[(2, 'bar'), (8, 'hello')]"
+
+    nl_table_engine = NLSQLTableQueryEngine(index.sql_database)
+    task = nl_table_engine.aquery("test_table:user_id,foo")
     response = asyncio.run(task)
     assert str(response) == "[(2, 'bar'), (8, 'hello')]"
 

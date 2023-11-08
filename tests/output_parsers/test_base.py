@@ -1,9 +1,12 @@
 """Test Output parsers."""
 
 
-from langchain.output_parsers import ResponseSchema
-from langchain.schema import BaseOutputParser as LCOutputParser
-
+from llama_index.bridge.langchain import (
+    BaseOutputParser as LCOutputParser,
+)
+from llama_index.bridge.langchain import (
+    ResponseSchema,
+)
 from llama_index.output_parsers.langchain import LangchainOutputParser
 
 
@@ -18,10 +21,7 @@ class MockOutputParser(LCOutputParser):
 
     def get_format_instructions(self) -> str:
         """Get format instructions."""
-        fmt_instructions = (
-            f"{{ {self.response_schema.name}, {self.response_schema.description} }}"
-        )
-        return fmt_instructions
+        return f"{{ {self.response_schema.name}, {self.response_schema.description} }}"
 
     def parse(self, text: str) -> str:
         """Parse the output of an LLM call."""

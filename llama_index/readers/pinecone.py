@@ -3,7 +3,7 @@
 from typing import Any, Dict, List, Optional
 
 from llama_index.readers.base import BaseReader
-from llama_index.readers.schema.base import Document
+from llama_index.schema import Document
 
 
 class PineconeReader(BaseReader):
@@ -17,7 +17,7 @@ class PineconeReader(BaseReader):
     def __init__(self, api_key: str, environment: str):
         """Initialize with parameters."""
         try:
-            import pinecone  # noqa: F401
+            import pinecone
         except ImportError:
             raise ImportError(
                 "`pinecone` package not found, please run `pip install pinecone-client`"
@@ -74,7 +74,7 @@ class PineconeReader(BaseReader):
             documents.append(Document(text=text, embedding=embedding))
 
         if not separate_documents:
-            text_list = [doc.get_text() for doc in documents]
+            text_list = [doc.get_content() for doc in documents]
             text = "\n\n".join(text_list)
             documents = [Document(text=text)]
 

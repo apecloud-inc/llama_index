@@ -1,11 +1,11 @@
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
-from llama_index.callbacks.schema import CBEventType
-from llama_index.data_structs.node import IndexNode, Node, NodeWithScore
+from llama_index.callbacks.schema import CBEventType, EventPayload
 from llama_index.indices.composability.graph import ComposableGraph
 from llama_index.indices.query.base import BaseQueryEngine
 from llama_index.indices.query.schema import QueryBundle
 from llama_index.response.schema import RESPONSE_TYPE
+from llama_index.schema import IndexNode, NodeWithScore, TextNode
 
 
 class ComposableGraphQueryEngine(BaseQueryEngine):
@@ -19,6 +19,8 @@ class ComposableGraphQueryEngine(BaseQueryEngine):
         custom_query_engines (Optional[Dict[str, BaseQueryEngine]]): A dictionary of
             custom query engines.
         recursive (bool): Whether to recursively query the graph.
+        **kwargs: additional arguments to be passed to the underlying index query
+            engine.
 
     """
 
@@ -27,15 +29,21 @@ class ComposableGraphQueryEngine(BaseQueryEngine):
         graph: ComposableGraph,
         custom_query_engines: Optional[Dict[str, BaseQueryEngine]] = None,
         recursive: bool = True,
+        **kwargs: Any
     ) -> None:
         """Init params."""
         self._graph = graph
         self._custom_query_engines = custom_query_engines or {}
+        self._kwargs = kwargs
 
         # additional configs
         self._recursive = recursive
         callback_manager = self._graph.service_context.callback_manager
         super().__init__(callback_manager)
+
+    def _get_prompt_modules(self) -> Dict[str, Any]:
+        """Get prompt modules."""
+        return {}
 
     async def _aquery(self, query_bundle: QueryBundle) -> RESPONSE_TYPE:
         return self._query_index(query_bundle, index_id=None, level=0)
@@ -51,43 +59,43 @@ class ComposableGraphQueryEngine(BaseQueryEngine):
     ) -> RESPONSE_TYPE:
         """Query a single index."""
         index_id = index_id or self._graph.root_id
-        event_id = self.callback_manager.on_event_start(
-            CBEventType.QUERY, payload={"query_str": query_bundle.query_str}
-        )
 
-        # get query engine
-        if index_id in self._custom_query_engines:
-            query_engine = self._custom_query_engines[index_id]
-        else:
-            query_engine = self._graph.get_index(index_id).as_query_engine()
-
-        retrieve_event_id = self.callback_manager.on_event_start(CBEventType.RETRIEVE)
-        nodes = query_engine.retrieve(query_bundle)
-        self.callback_manager.on_event_end(
-            CBEventType.RETRIEVE, payload={"nodes": nodes}, event_id=retrieve_event_id
-        )
-
-        if self._recursive:
-            # do recursion here
-            nodes_for_synthesis = []
-            additional_source_nodes = []
-            for node_with_score in nodes:
-                node_with_score, source_nodes = self._fetch_recursive_nodes(
-                    node_with_score, query_bundle, level
+        with self.callback_manager.event(
+            CBEventType.QUERY, payload={EventPayload.QUERY_STR: query_bundle.query_str}
+        ) as query_event:
+            # get query engine
+            if index_id in self._custom_query_engines:
+                query_engine = self._custom_query_engines[index_id]
+            else:
+                query_engine = self._graph.get_index(index_id).as_query_engine(
+                    **self._kwargs
                 )
-                nodes_for_synthesis.append(node_with_score)
-                additional_source_nodes.extend(source_nodes)
-            response = query_engine.synthesize(
-                query_bundle, nodes_for_synthesis, additional_source_nodes
-            )
-        else:
-            response = query_engine.synthesize(query_bundle, nodes)
 
-        self.callback_manager.on_event_end(
-            CBEventType.QUERY,
-            payload={"response": response},
-            event_id=event_id,
-        )
+            with self.callback_manager.event(
+                CBEventType.RETRIEVE,
+                payload={EventPayload.QUERY_STR: query_bundle.query_str},
+            ) as retrieve_event:
+                nodes = query_engine.retrieve(query_bundle)
+                retrieve_event.on_end(payload={EventPayload.NODES: nodes})
+
+            if self._recursive:
+                # do recursion here
+                nodes_for_synthesis = []
+                additional_source_nodes = []
+                for node_with_score in nodes:
+                    node_with_score, source_nodes = self._fetch_recursive_nodes(
+                        node_with_score, query_bundle, level
+                    )
+                    nodes_for_synthesis.append(node_with_score)
+                    additional_source_nodes.extend(source_nodes)
+                response = query_engine.synthesize(
+                    query_bundle, nodes_for_synthesis, additional_source_nodes
+                )
+            else:
+                response = query_engine.synthesize(query_bundle, nodes)
+
+            query_event.on_end(payload={EventPayload.RESPONSE: response})
+
         return response
 
     def _fetch_recursive_nodes(
@@ -107,7 +115,7 @@ class ComposableGraphQueryEngine(BaseQueryEngine):
             # recursive call
             response = self._query_index(query_bundle, index_node.index_id, level + 1)
 
-            new_node = Node(text=str(response))
+            new_node = TextNode(text=str(response))
             new_node_with_score = NodeWithScore(
                 node=new_node, score=node_with_score.score
             )

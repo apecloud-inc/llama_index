@@ -1,9 +1,11 @@
 """Mock predict."""
 
 import json
-from typing import Any, Dict, Tuple
+from typing import Any, Dict
 
-from llama_index.prompts.base import Prompt
+from llama_index.prompts.base import (
+    BasePromptTemplate,
+)
 from llama_index.prompts.prompt_type import PromptType
 from llama_index.token_counter.utils import mock_extract_keywords_response
 
@@ -133,7 +135,7 @@ def _mock_decompose_query(prompt_args: Dict) -> str:
 def _mock_pandas(prompt_args: Dict) -> str:
     """Mock pandas prompt."""
     query_str = prompt_args["query_str"]
-    return f'df["{query_str}"].iloc[0]'
+    return f'df["{query_str}"]'
 
 
 def _mock_choice_select(prompt_args: Dict) -> str:
@@ -146,65 +148,79 @@ def _mock_sql_response_synthesis(prompt_args: Dict) -> str:
     return prompt_args["sql_response_str"]
 
 
+def _mock_sql_response_synthesis_v2(prompt_args: Dict) -> str:
+    """Mock sql response synthesis prompt.
+
+    TODO: deprecate the above
+
+    """
+    return prompt_args["context_str"]
+
+
 def _mock_conversation(prompt_args: Dict) -> str:
     return prompt_args["history"] + ":" + prompt_args["message"]
 
 
-def mock_llmpredictor_predict(prompt: Prompt, **prompt_args: Any) -> Tuple[str, str]:
+def mock_llmpredictor_predict(prompt: BasePromptTemplate, **prompt_args: Any) -> str:
     """Mock predict method of LLMPredictor.
 
     Depending on the prompt, return response.
 
     """
-    formatted_prompt = prompt.format(**prompt_args)
-    full_prompt_args = prompt.get_full_format_args(prompt_args)
-    if prompt.prompt_type == PromptType.SUMMARY:
+    full_prompt_args = {
+        **prompt.kwargs,
+        **prompt_args,
+    }
+    prompt_type = prompt.metadata["prompt_type"]
+    if prompt_type == PromptType.SUMMARY:
         response = _mock_summary_predict(full_prompt_args)
-    elif prompt.prompt_type == PromptType.TREE_INSERT:
+    elif prompt_type == PromptType.TREE_INSERT:
         response = _mock_insert_predict()
-    elif prompt.prompt_type == PromptType.TREE_SELECT:
+    elif prompt_type == PromptType.TREE_SELECT:
         response = _mock_query_select()
-    elif prompt.prompt_type == PromptType.REFINE:
+    elif prompt_type == PromptType.REFINE:
         response = _mock_refine(full_prompt_args)
-    elif prompt.prompt_type == PromptType.QUESTION_ANSWER:
+    elif prompt_type == PromptType.QUESTION_ANSWER:
         response = _mock_answer(full_prompt_args)
-    elif prompt.prompt_type == PromptType.KEYWORD_EXTRACT:
+    elif prompt_type == PromptType.KEYWORD_EXTRACT:
         response = _mock_keyword_extract(full_prompt_args)
-    elif prompt.prompt_type == PromptType.QUERY_KEYWORD_EXTRACT:
+    elif prompt_type == PromptType.QUERY_KEYWORD_EXTRACT:
         response = _mock_query_keyword_extract(full_prompt_args)
-    elif prompt.prompt_type == PromptType.SCHEMA_EXTRACT:
+    elif prompt_type == PromptType.SCHEMA_EXTRACT:
         response = _mock_schema_extract(full_prompt_args)
-    elif prompt.prompt_type == PromptType.TEXT_TO_SQL:
+    elif prompt_type == PromptType.TEXT_TO_SQL:
         response = _mock_text_to_sql(full_prompt_args)
-    elif prompt.prompt_type == PromptType.KNOWLEDGE_TRIPLET_EXTRACT:
+    elif prompt_type == PromptType.KNOWLEDGE_TRIPLET_EXTRACT:
         response = _mock_kg_triplet_extract(full_prompt_args)
-    elif prompt.prompt_type == PromptType.SIMPLE_INPUT:
+    elif prompt_type == PromptType.SIMPLE_INPUT:
         response = _mock_input(full_prompt_args)
-    elif prompt.prompt_type == PromptType.SINGLE_SELECT:
+    elif prompt_type == PromptType.SINGLE_SELECT:
         response = _mock_single_select()
-    elif prompt.prompt_type == PromptType.MULTI_SELECT:
+    elif prompt_type == PromptType.MULTI_SELECT:
         response = _mock_multi_select(full_prompt_args)
-    elif prompt.prompt_type == PromptType.SUB_QUESTION:
+    elif prompt_type == PromptType.SUB_QUESTION:
         response = _mock_sub_questions()
-    elif prompt.prompt_type == PromptType.PANDAS:
+    elif prompt_type == PromptType.PANDAS:
         response = _mock_pandas(full_prompt_args)
-    elif prompt.prompt_type == PromptType.SQL_RESPONSE_SYNTHESIS:
+    elif prompt_type == PromptType.SQL_RESPONSE_SYNTHESIS:
         response = _mock_sql_response_synthesis(full_prompt_args)
-    elif prompt.prompt_type == PromptType.DECOMPOSE:
+    elif prompt_type == PromptType.SQL_RESPONSE_SYNTHESIS_V2:
+        response = _mock_sql_response_synthesis_v2(full_prompt_args)
+    elif prompt_type == PromptType.DECOMPOSE:
         response = _mock_decompose_query(full_prompt_args)
-    elif prompt.prompt_type == PromptType.CHOICE_SELECT:
+    elif prompt_type == PromptType.CHOICE_SELECT:
         response = _mock_choice_select(full_prompt_args)
-    elif prompt.prompt_type == PromptType.CONVERSATION:
+    elif prompt_type == PromptType.CONVERSATION:
         response = _mock_conversation(full_prompt_args)
     else:
         response = str(full_prompt_args)
 
-    return response, formatted_prompt
+    return response
 
 
 def patch_llmpredictor_predict(
-    self: Any, prompt: Prompt, **prompt_args: Any
-) -> Tuple[str, str]:
+    self: Any, prompt: BasePromptTemplate, **prompt_args: Any
+) -> str:
     """Mock predict method of LLMPredictor.
 
     Depending on the prompt, return response.
@@ -214,19 +230,14 @@ def patch_llmpredictor_predict(
 
 
 async def patch_llmpredictor_apredict(
-    self: Any, prompt: Prompt, **prompt_args: Any
-) -> Tuple[str, str]:
+    self: Any, prompt: BasePromptTemplate, **prompt_args: Any
+) -> str:
     """Mock apredict method of LLMPredictor."""
     return patch_llmpredictor_predict(self, prompt, **prompt_args)
 
 
 async def mock_llmpredictor_apredict(
-    prompt: Prompt, **prompt_args: Any
-) -> Tuple[str, str]:
+    prompt: BasePromptTemplate, **prompt_args: Any
+) -> str:
     """Mock apredict method of LLMPredictor."""
     return mock_llmpredictor_predict(prompt, **prompt_args)
-
-
-def mock_llmchain_predict(**full_prompt_args: Any) -> str:
-    """Mock LLMChain predict with a generic response."""
-    return "generic response from LLMChain.predict()"

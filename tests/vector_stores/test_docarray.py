@@ -3,8 +3,7 @@ from pathlib import Path
 from typing import List
 
 import pytest
-
-from llama_index.data_structs.node import DocumentRelationship, Node
+from llama_index.schema import NodeRelationship, RelatedNodeInfo, TextNode
 from llama_index.vector_stores import (
     DocArrayHnswVectorStore,
     DocArrayInMemoryVectorStore,
@@ -12,55 +11,48 @@ from llama_index.vector_stores import (
 from llama_index.vector_stores.types import (
     ExactMatchFilter,
     MetadataFilters,
-    NodeWithEmbedding,
     VectorStoreQuery,
 )
 
 docarray = pytest.importorskip("docarray")
 
 
-@pytest.fixture
-def node_embeddings() -> List[NodeWithEmbedding]:
+@pytest.fixture()
+def node_embeddings() -> List[TextNode]:
     return [
-        NodeWithEmbedding(
+        TextNode(
+            text="lorem ipsum",
+            id_="c330d77f-90bd-4c51-9ed2-57d8d693b3b0",
+            relationships={NodeRelationship.SOURCE: RelatedNodeInfo(node_id="test-0")},
+            metadata={
+                "author": "Stephen King",
+                "theme": "Friendship",
+            },
             embedding=[1.0, 0.0, 0.0],
-            node=Node(
-                text="lorem ipsum",
-                doc_id="c330d77f-90bd-4c51-9ed2-57d8d693b3b0",
-                relationships={DocumentRelationship.SOURCE: "test-0"},
-                extra_info={
-                    "author": "Stephen King",
-                    "theme": "Friendship",
-                },
-            ),
         ),
-        NodeWithEmbedding(
+        TextNode(
+            text="lorem ipsum",
+            id_="c3d1e1dd-8fb4-4b8f-b7ea-7fa96038d39d",
+            relationships={NodeRelationship.SOURCE: RelatedNodeInfo(node_id="test-1")},
+            metadata={
+                "director": "Francis Ford Coppola",
+                "theme": "Mafia",
+            },
             embedding=[0.0, 1.0, 0.0],
-            node=Node(
-                text="lorem ipsum",
-                doc_id="c3d1e1dd-8fb4-4b8f-b7ea-7fa96038d39d",
-                relationships={DocumentRelationship.SOURCE: "test-1"},
-                extra_info={
-                    "director": "Francis Ford Coppola",
-                    "theme": "Mafia",
-                },
-            ),
         ),
-        NodeWithEmbedding(
+        TextNode(
+            text="lorem ipsum",
+            id_="c3ew11cd-8fb4-4b8f-b7ea-7fa96038d39d",
+            relationships={NodeRelationship.SOURCE: RelatedNodeInfo(node_id="test-2")},
+            metadata={
+                "director": "Christopher Nolan",
+            },
             embedding=[0.0, 0.0, 1.0],
-            node=Node(
-                text="lorem ipsum",
-                doc_id="c3ew11cd-8fb4-4b8f-b7ea-7fa96038d39d",
-                relationships={DocumentRelationship.SOURCE: "test-2"},
-                extra_info={
-                    "director": "Christopher Nolan",
-                },
-            ),
         ),
     ]
 
 
-def test_hnsw(node_embeddings: List[NodeWithEmbedding], tmp_path: Path) -> None:
+def test_hnsw(node_embeddings: List[TextNode], tmp_path: Path) -> None:
     docarray_vector_store = DocArrayHnswVectorStore(work_dir=str(tmp_path), dim=3)
     docarray_vector_store.add(node_embeddings)
     assert docarray_vector_store.num_docs() == 3
@@ -68,8 +60,9 @@ def test_hnsw(node_embeddings: List[NodeWithEmbedding], tmp_path: Path) -> None:
     query_emb = VectorStoreQuery(query_embedding=[0.0, 0.1, 0.0])
     res = docarray_vector_store.query(query_emb)
 
+    assert res.nodes is not None
     assert len(res.nodes) == 1  # type: ignore[arg-type]
-    rf = res.nodes[0].relationships[DocumentRelationship.SOURCE]  # type: ignore[index]
+    rf = res.nodes[0].ref_doc_id
     assert rf == "test-1"
 
     docarray_vector_store.delete(ref_doc_id="test-1")
@@ -82,7 +75,7 @@ def test_hnsw(node_embeddings: List[NodeWithEmbedding], tmp_path: Path) -> None:
     assert new_vector_store.num_docs() == 1
 
 
-def test_in_memory(node_embeddings: List[NodeWithEmbedding], tmp_path: Path) -> None:
+def test_in_memory(node_embeddings: List[TextNode], tmp_path: Path) -> None:
     docarray_vector_store = DocArrayInMemoryVectorStore()
     docarray_vector_store.add(node_embeddings)
     assert docarray_vector_store.num_docs() == 3
@@ -90,8 +83,9 @@ def test_in_memory(node_embeddings: List[NodeWithEmbedding], tmp_path: Path) -> 
     query_emb = VectorStoreQuery(query_embedding=[0.0, 0.1, 0.0])
     res = docarray_vector_store.query(query_emb)
 
+    assert res.nodes is not None
     assert len(res.nodes) == 1  # type: ignore[arg-type]
-    rf = res.nodes[0].relationships[DocumentRelationship.SOURCE]  # type: ignore[index]
+    rf = res.nodes[0].ref_doc_id
     assert rf == "test-1"
 
     docarray_vector_store.delete(ref_doc_id="test-1")
@@ -108,7 +102,7 @@ def test_in_memory(node_embeddings: List[NodeWithEmbedding], tmp_path: Path) -> 
     assert new_vector_store.num_docs() == 1
 
 
-def test_in_memory_filters(node_embeddings: List[NodeWithEmbedding]) -> None:
+def test_in_memory_filters(node_embeddings: List[TextNode]) -> None:
     docarray_vector_store = DocArrayInMemoryVectorStore()
     docarray_vector_store.add(node_embeddings)
     assert docarray_vector_store.num_docs() == 3
@@ -118,13 +112,14 @@ def test_in_memory_filters(node_embeddings: List[NodeWithEmbedding]) -> None:
     query_emb = VectorStoreQuery(query_embedding=[0.0, 0.1, 0.0], filters=filters)
     res = docarray_vector_store.query(query_emb)
 
+    assert res.nodes is not None
     assert len(res.nodes) == 1  # type: ignore[arg-type]
-    assert res.nodes[0].extra_info["theme"] == "Mafia"  # type: ignore[index]
-    rf = res.nodes[0].relationships[DocumentRelationship.SOURCE]  # type: ignore[index]
+    assert res.nodes[0].metadata["theme"] == "Mafia"  # type: ignore[index]
+    rf = res.nodes[0].ref_doc_id
     assert rf == "test-1"
 
 
-def test_hnsw_filters(node_embeddings: List[NodeWithEmbedding], tmp_path: Path) -> None:
+def test_hnsw_filters(node_embeddings: List[TextNode], tmp_path: Path) -> None:
     docarray_vector_store = DocArrayHnswVectorStore(work_dir=str(tmp_path), dim=3)
     docarray_vector_store.add(node_embeddings)
     assert docarray_vector_store.num_docs() == 3
@@ -134,7 +129,8 @@ def test_hnsw_filters(node_embeddings: List[NodeWithEmbedding], tmp_path: Path) 
     query_emb = VectorStoreQuery(query_embedding=[0.0, 0.1, 0.0], filters=filters)
     res = docarray_vector_store.query(query_emb)
 
+    assert res.nodes is not None
     assert len(res.nodes) == 1  # type: ignore[arg-type]
-    assert res.nodes[0].extra_info["theme"] == "Mafia"  # type: ignore[index]
-    rf = res.nodes[0].relationships[DocumentRelationship.SOURCE]  # type: ignore[index]
+    assert res.nodes[0].metadata["theme"] == "Mafia"  # type: ignore[index]
+    rf = res.nodes[0].ref_doc_id
     assert rf == "test-1"

@@ -3,15 +3,18 @@ import math
 from typing import Any, List
 
 from llama_index.constants import DEFAULT_EMBEDDING_DIM
-from llama_index.data_structs.node import Node
+from llama_index.schema import BaseNode, TextNode
 from llama_index.vector_stores.types import (
     MetadataFilters,
-    NodeWithEmbedding,
     VectorStore,
     VectorStoreQuery,
     VectorStoreQueryResult,
 )
-from llama_index.vector_stores.utils import metadata_dict_to_node, node_to_metadata_dict
+from llama_index.vector_stores.utils import (
+    legacy_metadata_dict_to_node,
+    metadata_dict_to_node,
+    node_to_metadata_dict,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +37,7 @@ class SupabaseVectorStore(VectorStore):
     """
 
     stores_text = True
+    flat_metadata = False
 
     def __init__(
         self,
@@ -66,7 +70,7 @@ class SupabaseVectorStore(VectorStore):
     @property
     def client(self) -> None:
         """Get client."""
-        return None
+        return
 
     def _to_vecs_filters(self, filters: MetadataFilters) -> Any:
         """Convert llama filters to vecs filters. $eq is the only supported operator."""
@@ -75,11 +79,11 @@ class SupabaseVectorStore(VectorStore):
             vecs_filter[f.key] = {"$eq": f.value}
         return vecs_filter
 
-    def add(self, embedding_results: List[NodeWithEmbedding]) -> List[str]:
-        """Add embedding results to index.
+    def add(self, nodes: List[BaseNode], **add_kwargs: Any) -> List[str]:
+        """Add nodes to index.
 
-        Args
-            embedding_results: List[NodeWithEmbedding]: list of embedding results
+        Args:
+            nodes: List[BaseNode]: list of nodes with embeddings
 
         """
         if self._collection is None:
@@ -88,26 +92,48 @@ class SupabaseVectorStore(VectorStore):
         data = []
         ids = []
 
-        for result in embedding_results:
-            metadata_dict = node_to_metadata_dict(result.node)
+        for node in nodes:
             # NOTE: keep text in metadata dict since there's no special field in
             #       Supabase Vector.
-            metadata_dict["text"] = result.node.text
-            data.append((result.id, result.embedding, metadata_dict))
-            ids.append(result.id)
+            metadata_dict = node_to_metadata_dict(
+                node, remove_text=False, flat_metadata=self.flat_metadata
+            )
 
-        self._collection.upsert(vectors=data)
+            data.append((node.node_id, node.get_embedding(), metadata_dict))
+            ids.append(node.node_id)
+
+        self._collection.upsert(records=data)
 
         return ids
+
+    def get_by_id(self, doc_id: str) -> list:
+        """Get row ids by doc id.
+
+        Args:
+            doc_id (str): document id
+        """
+        filters = {"doc_id": {"$eq": doc_id}}
+
+        return self._collection.query(
+            data=None,
+            filters=filters,
+            include_value=False,
+            include_metadata=False,
+        )
+
+        # NOTE: list of row ids
 
     def delete(self, ref_doc_id: str, **delete_kwargs: Any) -> None:
         """Delete doc.
 
         Args:
-            doc_id (str): document id
+            :param ref_doc_id (str): document id
 
         """
-        raise NotImplementedError("Delete not yet implemented for vecs.")
+        row_ids = self.get_by_id(ref_doc_id)
+
+        if len(row_ids) > 0:
+            self._collection.delete(row_ids)
 
     def query(
         self,
@@ -125,7 +151,7 @@ class SupabaseVectorStore(VectorStore):
             filters = self._to_vecs_filters(query.filters)
 
         results = self._collection.query(
-            query_vector=query.query_embedding,
+            data=query.query_embedding,
             limit=query.similarity_top_k,
             filters=filters,
             include_value=True,
@@ -137,16 +163,23 @@ class SupabaseVectorStore(VectorStore):
         nodes = []
         for id_, distance, metadata in results:
             """shape of the result is [(vector, distance, metadata)]"""
-
             text = metadata.pop("text", None)
-            extra_info, node_info, relationships = metadata_dict_to_node(metadata)
-            node = Node(
-                doc_id=id_,
-                text=text,
-                extra_info=extra_info,
-                node_info=node_info,
-                relationships=relationships,
-            )
+
+            try:
+                node = metadata_dict_to_node(metadata)
+            except Exception:
+                # NOTE: deprecated legacy logic for backward compatibility
+                metadata, node_info, relationships = legacy_metadata_dict_to_node(
+                    metadata
+                )
+                node = TextNode(
+                    id_=id_,
+                    text=text,
+                    metadata=metadata,
+                    start_char_idx=node_info.get("start", None),
+                    end_char_idx=node_info.get("end", None),
+                    relationships=relationships,
+                )
 
             nodes.append(node)
             similarities.append(1.0 - math.exp(-distance))

@@ -1,21 +1,20 @@
 """Test LLM reranker."""
 
-from llama_index.indices.query.schema import QueryBundle
-from llama_index.prompts.prompts import Prompt
-from llama_index.data_structs.node import Node, NodeWithScore
-from llama_index.llm_predictor import LLMPredictor
+from typing import Any, List
 from unittest.mock import patch
-from typing import List, Any, Tuple
-from llama_index.prompts.prompts import QuestionAnswerPrompt
+
 from llama_index.indices.postprocessor.llm_rerank import LLMRerank
+from llama_index.indices.query.schema import QueryBundle
 from llama_index.indices.service_context import ServiceContext
+from llama_index.llm_predictor import LLMPredictor
+from llama_index.prompts import BasePromptTemplate
+from llama_index.schema import BaseNode, NodeWithScore, TextNode
 
 
 def mock_llmpredictor_predict(
-    self: Any, prompt: Prompt, **prompt_args: Any
-) -> Tuple[str, str]:
+    self: Any, prompt: BasePromptTemplate, **prompt_args: Any
+) -> str:
     """Patch llm predictor predict."""
-    assert isinstance(prompt, QuestionAnswerPrompt)
     context_str = prompt_args["context_str"]
     node_strs = context_str.split("\n")
     node_to_choice_and_score = {
@@ -34,13 +33,13 @@ def mock_llmpredictor_predict(
         if choice:
             choices_and_scores.append((idx + 1, score))
 
-    result_strs = [f"Doc: {str(c)}, Relevance: {s}" for c, s in choices_and_scores]
-    return "\n".join(result_strs), ""
+    result_strs = [f"Doc: {c!s}, Relevance: {s}" for c, s in choices_and_scores]
+    return "\n".join(result_strs)
 
 
-def mock_format_node_batch_fn(nodes: List[Node]) -> str:
+def mock_format_node_batch_fn(nodes: List[BaseNode]) -> str:
     """Mock format node batch fn."""
-    return "\n".join([node.get_text() for node in nodes])
+    return "\n".join([node.get_content() for node in nodes])
 
 
 @patch.object(
@@ -51,16 +50,16 @@ def mock_format_node_batch_fn(nodes: List[Node]) -> str:
 def test_llm_rerank(mock_service_context: ServiceContext) -> None:
     """Test LLM rerank."""
     nodes = [
-        Node("Test"),
-        Node("Test2"),
-        Node("Test3"),
-        Node("Test4"),
-        Node("Test5"),
-        Node("Test6"),
-        Node("Test7"),
-        Node("Test8"),
+        TextNode(text="Test"),
+        TextNode(text="Test2"),
+        TextNode(text="Test3"),
+        TextNode(text="Test4"),
+        TextNode(text="Test5"),
+        TextNode(text="Test6"),
+        TextNode(text="Test7"),
+        TextNode(text="Test8"),
     ]
-    nodes_with_score = [NodeWithScore(n) for n in nodes]
+    nodes_with_score = [NodeWithScore(node=n) for n in nodes]
 
     # choice batch size 4 (so two batches)
     # take top-3 across all data
@@ -75,6 +74,6 @@ def test_llm_rerank(mock_service_context: ServiceContext) -> None:
         nodes_with_score, QueryBundle(query_str)
     )
     assert len(result_nodes) == 3
-    assert result_nodes[0].node.text == "Test7"
-    assert result_nodes[1].node.text == "Test5"
-    assert result_nodes[2].node.text == "Test3"
+    assert result_nodes[0].node.get_content() == "Test7"
+    assert result_nodes[1].node.get_content() == "Test5"
+    assert result_nodes[2].node.get_content() == "Test3"

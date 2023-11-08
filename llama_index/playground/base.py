@@ -2,28 +2,30 @@
 from __future__ import annotations
 
 import time
-from typing import Any, Dict, List, Optional, Type, Union
+from typing import Any, Dict, List, Type
 
 import pandas as pd
-from langchain.input import get_color_mapping, print_text
 
+from llama_index.callbacks import CallbackManager, TokenCountingHandler
 from llama_index.indices.base import BaseIndex
-from llama_index.indices.list.base import ListIndex, ListRetrieverMode
+from llama_index.indices.list.base import ListRetrieverMode, SummaryIndex
 from llama_index.indices.tree.base import TreeIndex, TreeRetrieverMode
 from llama_index.indices.vector_store import VectorStoreIndex
-from llama_index.readers.schema.base import Document
+from llama_index.llm_predictor import LLMPredictor
+from llama_index.schema import Document
+from llama_index.utils import get_color_mapping, print_text
 
 DEFAULT_INDEX_CLASSES: List[Type[BaseIndex]] = [
     VectorStoreIndex,
     TreeIndex,
-    ListIndex,
+    SummaryIndex,
 ]
 
 INDEX_SPECIFIC_QUERY_MODES_TYPE = Dict[Type[BaseIndex], List[str]]
 
 DEFAULT_MODES: INDEX_SPECIFIC_QUERY_MODES_TYPE = {
     TreeIndex: [e.value for e in TreeRetrieverMode],
-    ListIndex: [e.value for e in ListRetrieverMode],
+    SummaryIndex: [e.value for e in ListRetrieverMode],
     VectorStoreIndex: ["default"],
 }
 
@@ -119,8 +121,8 @@ class Playground:
         self._retriever_modes = retriever_modes
 
     def compare(
-        self, query_text: str, to_pandas: Optional[bool] = True
-    ) -> Union[pd.DataFrame, List[Dict[str, Any]]]:
+        self, query_text: str, to_pandas: bool | None = True
+    ) -> pd.DataFrame | List[Dict[str, Any]]:
         """Compare index outputs on an input query.
 
         Args:
@@ -143,9 +145,21 @@ class Playground:
                     f"\033[1m{index_name}\033[0m, retriever mode = {retriever_mode}",
                     end="\n",
                 )
-                # TODO: refactor query mode
+
+                # insert token counter into service context
+                service_context = index.service_context
+                token_counter = TokenCountingHandler()
+                callback_manager = CallbackManager([token_counter])
+                if isinstance(service_context.llm_predictor, LLMPredictor):
+                    service_context.llm_predictor.llm.callback_manager = (
+                        callback_manager
+                    )
+                    service_context.embed_model.callback_manager = callback_manager
+
                 try:
-                    query_engine = index.as_query_engine(retriever_mode=retriever_mode)
+                    query_engine = index.as_query_engine(
+                        retriever_mode=retriever_mode, service_context=service_context
+                    )
                 except ValueError:
                     continue
 
@@ -154,17 +168,15 @@ class Playground:
 
                 duration = time.time() - start_time
 
-                llm_token_usage = index.service_context.llm_predictor.last_token_usage
-                embed_token_usage = index.service_context.embed_model.last_token_usage
-
                 result.append(
                     {
                         "Index": index_name,
                         "Retriever Mode": retriever_mode,
                         "Output": str(output),
                         "Duration": duration,
-                        "LLM Tokens": llm_token_usage,
-                        "Embedding Tokens": embed_token_usage,
+                        "Prompt Tokens": token_counter.prompt_llm_token_count,
+                        "Completion Tokens": token_counter.completion_llm_token_count,
+                        "Embed Tokens": token_counter.total_embedding_token_count,
                     }
                 )
         print(f"\nRan {len(result)} combinations in total.")

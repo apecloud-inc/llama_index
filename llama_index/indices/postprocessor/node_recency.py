@@ -1,15 +1,15 @@
 """Node recency post-processor."""
+from datetime import datetime
+from typing import List, Optional, Set
 
-from llama_index.indices.postprocessor.node import BasePydanticNodePostprocessor
+import numpy as np
+import pandas as pd
+
+from llama_index.bridge.pydantic import Field
+from llama_index.indices.postprocessor.types import BaseNodePostprocessor
 from llama_index.indices.query.schema import QueryBundle
 from llama_index.indices.service_context import ServiceContext
-from llama_index.data_structs.node import NodeWithScore
-from pydantic import Field
-from typing import Optional, List, Set
-import pandas as pd
-import numpy as np
-from datetime import datetime
-
+from llama_index.schema import MetadataMode, NodeWithScore
 
 # NOTE: currently not being used
 # DEFAULT_INFER_RECENCY_TMPL = (
@@ -40,7 +40,7 @@ from datetime import datetime
 #         raise ValueError(f"Invalid recency prediction: {pred}.")
 
 
-class FixedRecencyPostprocessor(BasePydanticNodePostprocessor):
+class FixedRecencyPostprocessor(BaseNodePostprocessor):
     """Recency post-processor.
 
     This post-processor does the following steps:
@@ -56,34 +56,23 @@ class FixedRecencyPostprocessor(BasePydanticNodePostprocessor):
     top_k: int = 1
     # infer_recency_tmpl: str = Field(default=DEFAULT_INFER_RECENCY_TMPL)
     date_key: str = "date"
-    # if false, then search node info
-    in_extra_info: bool = True
 
-    def postprocess_nodes(
+    @classmethod
+    def class_name(cls) -> str:
+        return "FixedRecencyPostprocessor"
+
+    def _postprocess_nodes(
         self,
         nodes: List[NodeWithScore],
         query_bundle: Optional[QueryBundle] = None,
     ) -> List[NodeWithScore]:
         """Postprocess nodes."""
-
         if query_bundle is None:
             raise ValueError("Missing query bundle in extra info.")
 
-        # query_bundle = cast(QueryBundle, extra_info["query_bundle"])
-        # infer_recency_prompt = SimpleInputPrompt(self.infer_recency_tmpl)
-        # raw_pred, _ = self.service_context.llm_predictor.predict(
-        #     prompt=infer_recency_prompt,
-        #     query_str=query_bundle.query_str,
-        # )
-        # pred = parse_recency_pred(raw_pred)
-        # # if no need to use recency post-processor, return nodes as is
-        # if not pred:
-        #     return nodes
-
         # sort nodes by date
-        info_dict_attr = "extra_info" if self.in_extra_info else "node_info"
         node_dates = pd.to_datetime(
-            [getattr(node.node, info_dict_attr)[self.date_key] for node in nodes]
+            [node.node.metadata[self.date_key] for node in nodes]
         )
         sorted_node_idxs = np.flip(node_dates.argsort())
         sorted_nodes = [nodes[idx] for idx in sorted_node_idxs]
@@ -103,7 +92,7 @@ DEFAULT_QUERY_EMBEDDING_TMPL = (
 )
 
 
-class EmbeddingRecencyPostprocessor(BasePydanticNodePostprocessor):
+class EmbeddingRecencyPostprocessor(BaseNodePostprocessor):
     """Recency post-processor.
 
     This post-processor does the following steps:
@@ -120,79 +109,63 @@ class EmbeddingRecencyPostprocessor(BasePydanticNodePostprocessor):
     service_context: ServiceContext
     # infer_recency_tmpl: str = Field(default=DEFAULT_INFER_RECENCY_TMPL)
     date_key: str = "date"
-    # if false, then search node info
-    in_extra_info: bool = True
     similarity_cutoff: float = Field(default=0.7)
     query_embedding_tmpl: str = Field(default=DEFAULT_QUERY_EMBEDDING_TMPL)
 
-    def postprocess_nodes(
+    @classmethod
+    def class_name(cls) -> str:
+        return "EmbeddingRecencyPostprocessor"
+
+    def _postprocess_nodes(
         self,
         nodes: List[NodeWithScore],
         query_bundle: Optional[QueryBundle] = None,
     ) -> List[NodeWithScore]:
         """Postprocess nodes."""
-
         if query_bundle is None:
             raise ValueError("Missing query bundle in extra info.")
 
-        # query_bundle = cast(QueryBundle, extra_info["query_bundle"])
-        # infer_recency_prompt = SimpleInputPrompt(self.infer_recency_tmpl)
-        # raw_pred, _ = self.service_context.llm_predictor.predict(
-        #     prompt=infer_recency_prompt,
-        #     query_str=query_bundle.query_str,
-        # )
-        # pred = parse_recency_pred(raw_pred)
-        # # if no need to use recency post-processor, return nodes as is
-        # if not pred:
-        #     return nodes
-
         # sort nodes by date
-        info_dict_attr = "extra_info" if self.in_extra_info else "node_info"
         node_dates = pd.to_datetime(
-            [getattr(node.node, info_dict_attr)[self.date_key] for node in nodes]
+            [node.node.metadata[self.date_key] for node in nodes]
         )
         sorted_node_idxs = np.flip(node_dates.argsort())
         sorted_nodes: List[NodeWithScore] = [nodes[idx] for idx in sorted_node_idxs]
 
         # get embeddings for each node
         embed_model = self.service_context.embed_model
-        for node in sorted_nodes:
-            embed_model.queue_text_for_embedding(
-                node.node.get_doc_id(), node.node.get_text()
-            )
+        texts = [node.get_content(metadata_mode=MetadataMode.EMBED) for node in nodes]
+        text_embeddings = embed_model.get_text_embedding_batch(texts=texts)
 
-        _, text_embeddings = embed_model.get_queued_text_embeddings()
         node_ids_to_skip: Set[str] = set()
         for idx, node in enumerate(sorted_nodes):
-            if node.node.get_doc_id() in node_ids_to_skip:
+            if node.node.node_id in node_ids_to_skip:
                 continue
             # get query embedding for the "query" node
             # NOTE: not the same as the text embedding because
             # we want to optimize for retrieval results
 
             query_text = self.query_embedding_tmpl.format(
-                context_str=node.node.get_text(),
+                context_str=node.node.get_content(metadata_mode=MetadataMode.EMBED),
             )
             query_embedding = embed_model.get_query_embedding(query_text)
 
             for idx2 in range(idx + 1, len(sorted_nodes)):
-                if sorted_nodes[idx2].node.get_doc_id() in node_ids_to_skip:
+                if sorted_nodes[idx2].node.node_id in node_ids_to_skip:
                     continue
                 node2 = sorted_nodes[idx2]
                 if (
                     np.dot(query_embedding, text_embeddings[idx2])
                     > self.similarity_cutoff
                 ):
-                    node_ids_to_skip.add(node2.node.get_doc_id())
+                    node_ids_to_skip.add(node2.node.node_id)
 
         return [
-            node
-            for node in sorted_nodes
-            if node.node.get_doc_id() not in node_ids_to_skip
+            node for node in sorted_nodes if node.node.node_id not in node_ids_to_skip
         ]
 
 
-class TimeWeightedPostprocessor(BasePydanticNodePostprocessor):
+class TimeWeightedPostprocessor(BaseNodePostprocessor):
     """Time-weighted post-processor.
 
     Reranks a set of nodes based on their recency.
@@ -206,7 +179,11 @@ class TimeWeightedPostprocessor(BasePydanticNodePostprocessor):
     now: Optional[float] = None
     top_k: int = 1
 
-    def postprocess_nodes(
+    @classmethod
+    def class_name(cls) -> str:
+        return "TimeWeightedPostprocessor"
+
+    def _postprocess_nodes(
         self,
         nodes: List[NodeWithScore],
         query_bundle: Optional[QueryBundle] = None,
@@ -221,10 +198,10 @@ class TimeWeightedPostprocessor(BasePydanticNodePostprocessor):
             score = node_with_score.score or 1.0
             node = node_with_score.node
             # time score
-            if node.node_info is None:
-                raise ValueError("node_info is None")
+            if node.metadata is None:
+                raise ValueError("metadata is None")
 
-            last_accessed = node.node_info.get(self.last_accessed_key, None)
+            last_accessed = node.metadata.get(self.last_accessed_key, None)
             if last_accessed is None:
                 last_accessed = now
 
@@ -239,11 +216,13 @@ class TimeWeightedPostprocessor(BasePydanticNodePostprocessor):
 
         top_k = min(self.top_k, len(sorted_tups))
         result_tups = sorted_tups[:top_k]
-        result_nodes = [NodeWithScore(n.node, score) for score, n in result_tups]
+        result_nodes = [
+            NodeWithScore(node=n.node, score=score) for score, n in result_tups
+        ]
 
         # set __last_accessed__ to now
         if self.time_access_refresh:
             for node_with_score in result_nodes:
-                node_with_score.node.get_node_info()[self.last_accessed_key] = now
+                node_with_score.node.metadata[self.last_accessed_key] = now
 
         return result_nodes

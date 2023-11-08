@@ -5,7 +5,7 @@ from typing import Any, Dict, List
 import numpy as np
 
 from llama_index.readers.base import BaseReader
-from llama_index.readers.schema.base import Document
+from llama_index.schema import Document
 
 
 class FaissReader(BaseReader):
@@ -30,7 +30,7 @@ class FaissReader(BaseReader):
             https://github.com/facebookresearch/faiss/wiki/Installing-Faiss
         """
         try:
-            import faiss  # noqa: F401
+            import faiss  # noqa
         except ImportError:
             raise ImportError(import_err_msg)
 
@@ -51,6 +51,7 @@ class FaissReader(BaseReader):
             k (int): Number of nearest neighbors to retrieve. Defaults to 4.
             separate_documents (Optional[bool]): Whether to return separate
                 documents. Defaults to True.
+
         Returns:
             List[Document]: A list of documents.
 
@@ -69,7 +70,7 @@ class FaissReader(BaseReader):
 
         if not separate_documents:
             # join all documents into one
-            text_list = [doc.get_text() for doc in documents]
+            text_list = [doc.get_content() for doc in documents]
             text = "\n\n".join(text_list)
             documents = [Document(text=text)]
 

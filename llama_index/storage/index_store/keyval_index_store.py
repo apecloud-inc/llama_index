@@ -1,4 +1,5 @@
 from typing import List, Optional
+
 from llama_index.data_structs.data_structs import IndexStruct
 from llama_index.storage.index_store.types import BaseIndexStore
 from llama_index.storage.index_store.utils import (
@@ -22,8 +23,8 @@ class KVIndexStore(BaseIndexStore):
     def __init__(self, kvstore: BaseKVStore, namespace: Optional[str] = None) -> None:
         """Init a KVIndexStore."""
         self._kvstore = kvstore
-        namespace = namespace or DEFAULT_NAMESPACE
-        self._collection = f"{namespace}/data"
+        self._namespace = namespace or DEFAULT_NAMESPACE
+        self._collection = f"{self._namespace}/data"
 
     def add_index_struct(self, index_struct: IndexStruct) -> None:
         """Add an index struct.

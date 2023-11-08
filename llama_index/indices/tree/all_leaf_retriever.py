@@ -1,14 +1,14 @@
 """Summarize query."""
 
 import logging
-from typing import List, cast
+from typing import Any, List, cast
 
 from llama_index.data_structs.data_structs import IndexGraph
-from llama_index.data_structs.node import NodeWithScore
 from llama_index.indices.base_retriever import BaseRetriever
 from llama_index.indices.query.schema import QueryBundle
 from llama_index.indices.tree.base import TreeIndex
 from llama_index.indices.utils import get_sorted_node_list
+from llama_index.schema import NodeWithScore
 
 logger = logging.getLogger(__name__)
 
@@ -23,12 +23,12 @@ class TreeAllLeafRetriever(BaseRetriever):
     when initialized, since we rebuild the tree for each query.
 
     Args:
-        text_qa_template (Optional[QuestionAnswerPrompt]): Question-Answer Prompt
+        text_qa_template (Optional[BasePromptTemplate]): Question-Answer Prompt
             (see :ref:`Prompt-Templates`).
 
     """
 
-    def __init__(self, index: TreeIndex):
+    def __init__(self, index: TreeIndex, **kwargs: Any) -> None:
         self._index = index
         self._index_struct = index.index_struct
         self._docstore = index.docstore
@@ -42,4 +42,4 @@ class TreeAllLeafRetriever(BaseRetriever):
         index_struct = cast(IndexGraph, self._index_struct)
         all_nodes = self._docstore.get_node_dict(index_struct.all_nodes)
         sorted_node_list = get_sorted_node_list(all_nodes)
-        return [NodeWithScore(node) for node in sorted_node_list]
+        return [NodeWithScore(node=node) for node in sorted_node_list]

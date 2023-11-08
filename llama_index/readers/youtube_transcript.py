@@ -1,18 +1,22 @@
 """Simple Reader that reads transcript of youtube video."""
 from typing import Any, List
 
-from llama_index.readers.base import BaseReader
-from llama_index.readers.schema.base import Document
+from llama_index.readers.base import BasePydanticReader
+from llama_index.schema import Document
 
 
-class YoutubeTranscriptReader(BaseReader):
+class YoutubeTranscriptReader(BasePydanticReader):
     """Youtube Transcript reader."""
 
-    def __init__(self) -> None:
-        """Initialize with parameters."""
+    is_remote: bool = True
+    languages: tuple = ("en",)
+
+    @classmethod
+    def class_name(cls) -> str:
+        return "YoutubeTranscriptReader"
 
     def load_data(self, ytlinks: List[str], **load_kwargs: Any) -> List[Document]:
-        """Load data from the input directory.
+        """Load data from the input links.
 
         Args:
             pages (List[str]): List of youtube links \
@@ -30,9 +34,11 @@ class YoutubeTranscriptReader(BaseReader):
         results = []
         for link in ytlinks:
             video_id = link.split("?v=")[-1]
-            srt = YouTubeTranscriptApi.get_transcript(video_id)
+            srt = YouTubeTranscriptApi.get_transcript(
+                video_id, languages=self.languages
+            )
             transcript = ""
             for chunk in srt:
                 transcript = transcript + chunk["text"] + "\n"
-            results.append(Document(transcript))
+            results.append(Document(text=transcript))
         return results

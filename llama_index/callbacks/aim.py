@@ -6,8 +6,8 @@ try:
 except ModuleNotFoundError:
     Run, Text = None, None
 
-from llama_index.callbacks.base import BaseCallbackHandler
-from llama_index.callbacks.schema import CBEventType
+from llama_index.callbacks.base_handler import BaseCallbackHandler
+from llama_index.callbacks.schema import CBEventType, EventPayload
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.WARNING)
@@ -81,6 +81,7 @@ class AimCallback(BaseCallbackHandler):
         event_type: CBEventType,
         payload: Optional[Dict[str, Any]] = None,
         event_id: str = "",
+        parent_id: str = "",
         **kwargs: Any,
     ) -> str:
         """
@@ -88,6 +89,7 @@ class AimCallback(BaseCallbackHandler):
             event_type (CBEventType): event type to store.
             payload (Optional[Dict[str, Any]]): payload to store.
             event_id (str): event id to store.
+            parent_id (str): parent event id.
         """
         return ""
 
@@ -108,15 +110,23 @@ class AimCallback(BaseCallbackHandler):
             raise ValueError("AimCallback failed to init properly.")
 
         if event_type is CBEventType.LLM and payload:
+            if EventPayload.PROMPT in payload:
+                llm_input = str(payload[EventPayload.PROMPT])
+                llm_output = str(payload[EventPayload.COMPLETION])
+            else:
+                message = payload.get(EventPayload.MESSAGES, [])
+                llm_input = "\n".join([str(x) for x in message])
+                llm_output = str(payload[EventPayload.RESPONSE])
+
             self._run.track(
-                Text(payload["formatted_prompt"]),
+                Text(llm_input),
                 name="prompt",
                 step=self._llm_response_step,
                 context={"event_id": event_id},
             )
 
             self._run.track(
-                Text(payload["response"]),
+                Text(llm_output),
                 name="response",
                 step=self._llm_response_step,
                 context={"event_id": event_id},
@@ -124,7 +134,7 @@ class AimCallback(BaseCallbackHandler):
 
             self._llm_response_step += 1
         elif event_type is CBEventType.CHUNKING and payload:
-            for chunk_id, chunk in enumerate(payload["chunks"]):
+            for chunk_id, chunk in enumerate(payload[EventPayload.CHUNKS]):
                 self._run.track(
                     Text(chunk),
                     name="chunk",

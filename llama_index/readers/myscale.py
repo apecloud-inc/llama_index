@@ -3,7 +3,7 @@ import logging
 from typing import Any, List, Optional
 
 from llama_index.readers.base import BaseReader
-from llama_index.readers.schema.base import Document
+from llama_index.schema import Document
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +21,7 @@ def format_list_to_string(lst: List) -> str:
 
 
 class MyScaleSettings:
-    """MyScale Client Configuration
+    """MyScale Client Configuration.
 
     Attribute:
         table (str) : Table name to operate on.
@@ -72,14 +72,13 @@ class MyScaleSettings:
             else ""
         )
 
-        query_statement = f"""
-            SELECT id, doc_id, text, node_info, extra_info, 
+        return f"""
+            SELECT id, doc_id, text, node_info, metadata,
             distance{search_params_str}(vector, {query_embed_str}) AS dist
             FROM {self.database}.{self.table} {where_str}
             ORDER BY dist {order}
             LIMIT {limit}
             """
-        return query_statement
 
 
 class MyScaleReader(BaseReader):
@@ -120,11 +119,11 @@ class MyScaleReader(BaseReader):
     ) -> None:
         """Initialize params."""
         import_err_msg = """
-            `clickhouse_connect` package not found, 
+            `clickhouse_connect` package not found,
             please run `pip install clickhouse-connect`
         """
         try:
-            import clickhouse_connect  # noqa: F401
+            import clickhouse_connect
         except ImportError:
             raise ImportError(import_err_msg)
 
@@ -163,7 +162,6 @@ class MyScaleReader(BaseReader):
         Returns:
             List[Document]: A list of documents.
         """
-
         query_statement = self.config.build_query_statement(
             query_embed=query_vector,
             where_str=where_str,
@@ -171,6 +169,6 @@ class MyScaleReader(BaseReader):
         )
 
         return [
-            Document(doc_id=r["doc_id"], text=r["text"], extra_info=r["extra_info"])
+            Document(id_=r["doc_id"], text=r["text"], metadata=r["metadata"])
             for r in self.client.query(query_statement).named_results()
         ]

@@ -5,17 +5,17 @@ from typing import Any, Dict, Optional, Sequence, Union
 
 # from llama_index.data_structs.data_structs import IndexGraph
 from llama_index.data_structs.data_structs import IndexGraph
-from llama_index.data_structs.node import Node
 from llama_index.indices.base import BaseIndex
 from llama_index.indices.base_retriever import BaseRetriever
 from llama_index.indices.common_tree.base import GPTTreeIndexBuilder
 from llama_index.indices.service_context import ServiceContext
 from llama_index.indices.tree.inserter import TreeIndexInserter
+from llama_index.prompts import BasePromptTemplate
 from llama_index.prompts.default_prompts import (
     DEFAULT_INSERT_PROMPT,
     DEFAULT_SUMMARY_PROMPT,
 )
-from llama_index.prompts.prompts import SummaryPrompt, TreeInsertPrompt
+from llama_index.schema import BaseNode
 from llama_index.storage.docstore.types import RefDocInfo
 
 
@@ -45,12 +45,13 @@ class TreeIndex(BaseIndex[IndexGraph]):
     A secondary answer is to directly synthesize the answer from the root nodes.
 
     Args:
-        summary_template (Optional[SummaryPrompt]): A Summarization Prompt
+        summary_template (Optional[BasePromptTemplate]): A Summarization Prompt
             (see :ref:`Prompt-Templates`).
-        insert_prompt (Optional[TreeInsertPrompt]): An Tree Insertion Prompt
+        insert_prompt (Optional[BasePromptTemplate]): An Tree Insertion Prompt
             (see :ref:`Prompt-Templates`).
         num_children (int): The number of children each node should have.
         build_tree (bool): Whether to build the tree during index construction.
+        show_progress (bool): Whether to show progress bars. Defaults to False.
 
     """
 
@@ -58,27 +59,29 @@ class TreeIndex(BaseIndex[IndexGraph]):
 
     def __init__(
         self,
-        nodes: Optional[Sequence[Node]] = None,
+        nodes: Optional[Sequence[BaseNode]] = None,
         index_struct: Optional[IndexGraph] = None,
         service_context: Optional[ServiceContext] = None,
-        summary_template: Optional[SummaryPrompt] = None,
-        insert_prompt: Optional[TreeInsertPrompt] = None,
+        summary_template: Optional[BasePromptTemplate] = None,
+        insert_prompt: Optional[BasePromptTemplate] = None,
         num_children: int = 10,
         build_tree: bool = True,
         use_async: bool = False,
+        show_progress: bool = False,
         **kwargs: Any,
     ) -> None:
         """Initialize params."""
         # need to set parameters before building index in base class.
         self.num_children = num_children
         self.summary_template = summary_template or DEFAULT_SUMMARY_PROMPT
-        self.insert_prompt: TreeInsertPrompt = insert_prompt or DEFAULT_INSERT_PROMPT
+        self.insert_prompt: BasePromptTemplate = insert_prompt or DEFAULT_INSERT_PROMPT
         self.build_tree = build_tree
         self._use_async = use_async
         super().__init__(
             nodes=nodes,
             index_struct=index_struct,
             service_context=service_context,
+            show_progress=show_progress,
             **kwargs,
         )
 
@@ -118,19 +121,19 @@ class TreeIndex(BaseIndex[IndexGraph]):
                 f"but retriever mode {retriever_mode} requires trees."
             )
 
-    def _build_index_from_nodes(self, nodes: Sequence[Node]) -> IndexGraph:
+    def _build_index_from_nodes(self, nodes: Sequence[BaseNode]) -> IndexGraph:
         """Build the index from nodes."""
         index_builder = GPTTreeIndexBuilder(
             self.num_children,
             self.summary_template,
             service_context=self._service_context,
             use_async=self._use_async,
+            show_progress=self._show_progress,
             docstore=self._docstore,
         )
-        index_graph = index_builder.build_from_nodes(nodes, build_tree=self.build_tree)
-        return index_graph
+        return index_builder.build_from_nodes(nodes, build_tree=self.build_tree)
 
-    def _insert(self, nodes: Sequence[Node], **insert_kwargs: Any) -> None:
+    def _insert(self, nodes: Sequence[BaseNode], **insert_kwargs: Any) -> None:
         """Insert a document."""
         # TODO: allow to customize insert prompt
         inserter = TreeIndexInserter(
@@ -143,7 +146,7 @@ class TreeIndex(BaseIndex[IndexGraph]):
         )
         inserter.insert(nodes)
 
-    def _delete_node(self, doc_id: str, **delete_kwargs: Any) -> None:
+    def _delete_node(self, node_id: str, **delete_kwargs: Any) -> None:
         """Delete a node."""
         raise NotImplementedError("Delete not implemented for tree index.")
 
@@ -155,15 +158,15 @@ class TreeIndex(BaseIndex[IndexGraph]):
 
         all_ref_doc_info = {}
         for node in nodes:
-            ref_doc_id = node.ref_doc_id
-            if not ref_doc_id:
+            ref_node = node.source_node
+            if not ref_node:
                 continue
 
-            ref_doc_info = self.docstore.get_ref_doc_info(ref_doc_id)
+            ref_doc_info = self.docstore.get_ref_doc_info(ref_node.node_id)
             if not ref_doc_info:
                 continue
 
-            all_ref_doc_info[ref_doc_id] = ref_doc_info
+            all_ref_doc_info[ref_node.node_id] = ref_doc_info
         return all_ref_doc_info
 
 

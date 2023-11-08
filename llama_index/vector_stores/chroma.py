@@ -1,18 +1,22 @@
 """Chroma vector store."""
 import logging
 import math
-from typing import Any, List, Tuple, cast
+from typing import Any, Dict, Generator, List, Optional, cast
 
-from llama_index.data_structs.node import DocumentRelationship, Node
+from llama_index.bridge.pydantic import Field, PrivateAttr
+from llama_index.schema import BaseNode, MetadataMode, TextNode
 from llama_index.utils import truncate_text
 from llama_index.vector_stores.types import (
+    BasePydanticVectorStore,
     MetadataFilters,
-    NodeWithEmbedding,
-    VectorStore,
     VectorStoreQuery,
     VectorStoreQueryResult,
 )
-from llama_index.vector_stores.utils import metadata_dict_to_node, node_to_metadata_dict
+from llama_index.vector_stores.utils import (
+    legacy_metadata_dict_to_node,
+    metadata_dict_to_node,
+    node_to_metadata_dict,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -25,16 +29,28 @@ def _to_chroma_filter(standard_filters: MetadataFilters) -> dict:
     return filters
 
 
-def _legacy_metadata_dict_to_node(metadata: dict) -> Tuple[dict, dict, dict]:
-    extra_info = metadata
-    node_info: dict = {}
-    relationships = {
-        DocumentRelationship.SOURCE: metadata["document_id"],
-    }
-    return extra_info, node_info, relationships
+import_err_msg = "`chromadb` package not found, please run `pip install chromadb`"
+
+MAX_CHUNK_SIZE = 41665  # One less than the max chunk size for ChromaDB
 
 
-class ChromaVectorStore(VectorStore):
+def chunk_list(
+    lst: List[BaseNode], max_chunk_size: int
+) -> Generator[List[BaseNode], None, None]:
+    """Yield successive max_chunk_size-sized chunks from lst.
+
+    Args:
+        lst (List[BaseNode]): list of nodes with embeddings
+        max_chunk_size (int): max chunk size
+
+    Yields:
+        Generator[List[BaseNode], None, None]: list of nodes with embeddings
+    """
+    for i in range(0, len(lst), max_chunk_size):
+        yield lst[i : i + max_chunk_size]
+
+
+class ChromaVectorStore(BasePydanticVectorStore):
     """Chroma vector store.
 
     In this vector store, embeddings are stored within a ChromaDB collection.
@@ -49,47 +65,130 @@ class ChromaVectorStore(VectorStore):
     """
 
     stores_text: bool = True
+    flat_metadata: bool = True
 
-    def __init__(self, chroma_collection: Any, **kwargs: Any) -> None:
+    host: Optional[str]
+    port: Optional[str]
+    ssl: bool
+    headers: Optional[Dict[str, str]]
+    persist_dir: Optional[str]
+    collection_kwargs: Dict[str, Any] = Field(default_factory=dict)
+
+    _collection: Any = PrivateAttr()
+
+    def __init__(
+        self,
+        chroma_collection: Any,
+        host: Optional[str] = None,
+        port: Optional[str] = None,
+        ssl: bool = False,
+        headers: Optional[Dict[str, str]] = None,
+        persist_dir: Optional[str] = None,
+        collection_kwargs: Optional[dict] = None,
+        **kwargs: Any,
+    ) -> None:
         """Init params."""
-        import_err_msg = (
-            "`chromadb` package not found, please run `pip install chromadb`"
-        )
         try:
-            import chromadb  # noqa: F401
+            import chromadb  # noqa
         except ImportError:
             raise ImportError(import_err_msg)
         from chromadb.api.models.Collection import Collection
 
         self._collection = cast(Collection, chroma_collection)
 
-    def add(self, embedding_results: List[NodeWithEmbedding]) -> List[str]:
-        """Add embedding results to index.
+        super().__init__(
+            host=host,
+            port=port,
+            ssl=ssl,
+            headers=headers,
+            persist_dir=persist_dir,
+            collection_kwargs=collection_kwargs or {},
+        )
 
-        Args
-            embedding_results: List[NodeWithEmbedding]: list of embedding results
+    @classmethod
+    def from_params(
+        cls,
+        collection_name: str,
+        host: Optional[str] = None,
+        port: Optional[str] = None,
+        ssl: bool = False,
+        headers: Optional[Dict[str, str]] = None,
+        persist_dir: Optional[str] = None,
+        collection_kwargs: Optional[dict] = {},
+        **kwargs: Any,
+    ) -> "ChromaVectorStore":
+        try:
+            import chromadb
+        except ImportError:
+            raise ImportError(import_err_msg)
+        if persist_dir:
+            client = chromadb.PersistentClient(path=persist_dir)
+            collection = client.get_or_create_collection(
+                name=collection_name, **collection_kwargs
+            )
+        elif host and port:
+            client = chromadb.HttpClient(host=host, port=port, ssl=ssl, headers=headers)
+            collection = client.get_or_create_collection(
+                name=collection_name, **collection_kwargs
+            )
+        else:
+            raise ValueError(
+                "Either `persist_dir` or (`host`,`port`) must be specified"
+            )
+        return cls(
+            chroma_collection=collection,
+            host=host,
+            port=port,
+            ssl=ssl,
+            headers=headers,
+            persist_dir=persist_dir,
+            collection_kwargs=collection_kwargs,
+            **kwargs,
+        )
+
+    @classmethod
+    def class_name(cls) -> str:
+        return "ChromaVectorStore"
+
+    def add(self, nodes: List[BaseNode], **add_kwargs: Any) -> List[str]:
+        """Add nodes to index.
+
+        Args:
+            nodes: List[BaseNode]: list of nodes with embeddings
 
         """
         if not self._collection:
             raise ValueError("Collection not initialized")
 
-        embeddings = []
-        metadatas = []
-        ids = []
-        documents = []
-        for result in embedding_results:
-            embeddings.append(result.embedding)
-            metadatas.append(node_to_metadata_dict(result.node))
-            ids.append(result.id)
-            documents.append(result.node.text or "")
+        max_chunk_size = MAX_CHUNK_SIZE
+        node_chunks = chunk_list(nodes, max_chunk_size)
 
-        self._collection.add(
-            embeddings=embeddings,
-            ids=ids,
-            metadatas=metadatas,
-            documents=documents,
-        )
-        return ids
+        all_ids = []
+        for node_chunk in node_chunks:
+            embeddings = []
+            metadatas = []
+            ids = []
+            documents = []
+            for node in node_chunk:
+                embeddings.append(node.get_embedding())
+                metadata_dict = node_to_metadata_dict(
+                    node, remove_text=True, flat_metadata=self.flat_metadata
+                )
+                if "context" in metadata_dict and metadata_dict["context"] is None:
+                    metadata_dict["context"] = ""
+                metadatas.append(metadata_dict)
+                ids.append(node.node_id)
+                documents.append(node.get_content(metadata_mode=MetadataMode.NONE))
+
+            self._collection.add(
+                embeddings=embeddings,
+                ids=ids,
+                metadatas=metadatas,
+                documents=documents,
+            )
+            all_ids.extend(ids)
+
+        return all_ids
 
     def delete(self, ref_doc_id: str, **delete_kwargs: Any) -> None:
         """
@@ -143,23 +242,26 @@ class ChromaVectorStore(VectorStore):
             results["distances"][0],
         ):
             try:
-                extra_info, node_info, relationships = metadata_dict_to_node(metadata)
+                node = metadata_dict_to_node(metadata)
+                node.set_content(text)
             except Exception:
                 # NOTE: deprecated legacy logic for backward compatibility
-                extra_info, node_info, relationships = _legacy_metadata_dict_to_node(
+                metadata, node_info, relationships = legacy_metadata_dict_to_node(
                     metadata
                 )
 
-            node = Node(
-                doc_id=node_id,
-                text=text,
-                extra_info=extra_info,
-                node_info=node_info,
-                relationships=relationships,
-            )
+                node = TextNode(
+                    text=text,
+                    id_=node_id,
+                    metadata=metadata,
+                    start_char_idx=node_info.get("start", None),
+                    end_char_idx=node_info.get("end", None),
+                    relationships=relationships,
+                )
+
             nodes.append(node)
 
-            similarity_score = 1.0 - math.exp(-distance)
+            similarity_score = math.exp(-distance)
             similarities.append(similarity_score)
 
             logger.debug(

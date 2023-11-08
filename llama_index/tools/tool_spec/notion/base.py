@@ -1,10 +1,12 @@
 """Notion tool spec."""
 
-from llama_index.tools.tool_spec.base import BaseToolSpec
-from llama_index.readers.notion import NotionPageReader
-from typing import Optional, List, Type, Dict, Any
+from typing import Any, Dict, List, Optional, Type
+
 import requests
-from pydantic import BaseModel
+
+from llama_index.bridge.pydantic import BaseModel
+from llama_index.readers.notion import NotionPageReader
+from llama_index.tools.tool_spec.base import BaseToolSpec
 
 SEARCH_URL = "https://api.notion.com/v1/search"
 
@@ -60,7 +62,7 @@ class NotionToolSpec(BaseToolSpec):
         """
         page_ids = page_ids or []
         docs = self.reader.load_data(page_ids=page_ids, database_id=database_id)
-        return "\n".join([doc.get_text() for doc in docs])
+        return "\n".join([doc.get_content() for doc in docs])
 
     def search_data(
         self,
@@ -96,5 +98,4 @@ class NotionToolSpec(BaseToolSpec):
 
         response = requests.post(SEARCH_URL, json=payload, headers=self.reader.headers)
         response_json = response.json()
-        response_results = response_json["results"]
-        return response_results
+        return response_json["results"]

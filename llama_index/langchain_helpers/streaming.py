@@ -1,9 +1,9 @@
 from queue import Queue
 from threading import Event
-from typing import Any, Generator, Union
+from typing import Any, Generator, List, Optional
+from uuid import UUID
 
-from langchain.callbacks.base import BaseCallbackHandler
-from langchain.schema import LLMResult
+from llama_index.bridge.langchain import BaseCallbackHandler, LLMResult
 
 
 class StreamingGeneratorCallbackHandler(BaseCallbackHandler):
@@ -25,7 +25,13 @@ class StreamingGeneratorCallbackHandler(BaseCallbackHandler):
         self._done.set()
 
     def on_llm_error(
-        self, error: Union[Exception, KeyboardInterrupt], **kwargs: Any
+        self,
+        error: BaseException,
+        *,
+        run_id: UUID,
+        parent_run_id: Optional[UUID] = None,
+        tags: Optional[List[str]] = None,
+        **kwargs: Any,
     ) -> None:
         self._done.set()
 

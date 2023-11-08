@@ -4,8 +4,8 @@ import logging
 import os
 from typing import Any, List
 
-from llama_index.readers.base import BaseReader
-from llama_index.readers.schema.base import Document
+from llama_index.readers.base import BasePydanticReader
+from llama_index.schema import Document
 
 SCOPES = ["https://www.googleapis.com/auth/documents.readonly"]
 
@@ -26,19 +26,21 @@ logger = logging.getLogger(__name__)
 # limitations under the License.
 
 
-class GoogleDocsReader(BaseReader):
+class GoogleDocsReader(BasePydanticReader):
     """Google Docs reader.
 
     Reads a page from Google Docs
 
     """
 
+    is_remote: bool = True
+
     def __init__(self) -> None:
         """Initialize with parameters."""
         try:
-            import google  # noqa: F401
-            import google_auth_oauthlib  # noqa: F401
-            import googleapiclient  # noqa: F401
+            import google  # noqa
+            import google_auth_oauthlib  # noqa
+            import googleapiclient  # noqa
         except ImportError:
             raise ImportError(
                 "`google_auth_oauthlib`, `googleapiclient` and `google` "
@@ -46,6 +48,10 @@ class GoogleDocsReader(BaseReader):
                 "Please run `pip install --upgrade google-api-python-client "
                 "google-auth-httplib2 google-auth-oauthlib`."
             )
+
+    @classmethod
+    def class_name(cls) -> str:
+        return "GoogleDocsReader"
 
     def load_data(self, document_ids: List[str]) -> List[Document]:
         """Load data from the input directory.
@@ -59,7 +65,7 @@ class GoogleDocsReader(BaseReader):
         results = []
         for document_id in document_ids:
             doc = self._load_doc(document_id)
-            results.append(Document(doc, extra_info={"document_id": document_id}))
+            results.append(Document(text=doc, metadata={"document_id": document_id}))
         return results
 
     def _load_doc(self, document_id: str) -> str:

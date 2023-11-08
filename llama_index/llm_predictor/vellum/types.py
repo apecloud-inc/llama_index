@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
 
 
 @dataclass(frozen=True, eq=True)
@@ -9,19 +8,19 @@ class VellumRegisteredPrompt:
     deployment_id: str
     deployment_name: str
     model_version_id: str
-    sandbox_id: Optional[str] = None
-    sandbox_snapshot_id: Optional[str] = None
-    prompt_id: Optional[str] = None
+    sandbox_id: str | None = None
+    sandbox_snapshot_id: str | None = None
+    prompt_id: str | None = None
 
     @property
-    def deployment_url(self) -> Optional[str]:
+    def deployment_url(self) -> str | None:
         if not self.deployment_id:
             return None
 
         return f"https://app.vellum.ai/deployments/{self.deployment_id}"
 
     @property
-    def sandbox_url(self) -> Optional[str]:
+    def sandbox_url(self) -> str | None:
         if not self.sandbox_id:
             return None
 

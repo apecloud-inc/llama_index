@@ -1,10 +1,11 @@
-from typing import Any, List, Optional, Sequence, cast
+from typing import Any, Dict, List, Optional, Sequence, cast
 
 from llama_index.indices.query.schema import QueryBundle
 from llama_index.indices.service_context import ServiceContext
 from llama_index.llm_predictor.base import BaseLLMPredictor
-from llama_index.output_parsers.base import BaseOutputParser, StructuredOutput
+from llama_index.output_parsers.base import StructuredOutput
 from llama_index.output_parsers.selection import Answer, SelectionOutputParser
+from llama_index.prompts.mixin import PromptDictType
 from llama_index.prompts.prompt_type import PromptType
 from llama_index.selectors.prompts import (
     DEFAULT_MULTI_SELECT_PROMPT_TMPL,
@@ -12,8 +13,9 @@ from llama_index.selectors.prompts import (
     MultiSelectPrompt,
     SingleSelectPrompt,
 )
-from llama_index.selectors.types import BaseSelector, SelectorResult
+from llama_index.selectors.types import BaseSelector, SelectorResult, SingleSelection
 from llama_index.tools.types import ToolMetadata
+from llama_index.types import BaseOutputParser
 
 
 def _build_choices_text(choices: Sequence[ToolMetadata]) -> str:
@@ -30,13 +32,17 @@ def _structured_output_to_selector_result(output: Any) -> SelectorResult:
     """Convert structured output to selector result."""
     structured_output = cast(StructuredOutput, output)
     answers = cast(List[Answer], structured_output.parsed_output)
-    inds = [answer.choice - 1 for answer in answers]  # for zero indexing
-    reasons = [answer.reason for answer in answers]
-    return SelectorResult(inds=inds, reasons=reasons)
+
+    # adjust for zero indexing
+    selections = [
+        SingleSelection(index=answer.choice - 1, reason=answer.reason)
+        for answer in answers
+    ]
+    return SelectorResult(selections=selections)
 
 
 class LLMSingleSelector(BaseSelector):
-    """LLM single selector
+    """LLM single selector.
 
     LLM-based selector that chooses one out of many options.
 
@@ -68,9 +74,6 @@ class LLMSingleSelector(BaseSelector):
         prompt_template_str = prompt_template_str or DEFAULT_SINGLE_SELECT_PROMPT_TMPL
         output_parser = output_parser or SelectionOutputParser()
 
-        # add output formatting to prompt template
-        prompt_template_str = output_parser.format(prompt_template_str)
-
         # construct prompt
         prompt = SingleSelectPrompt(
             template=prompt_template_str,
@@ -79,6 +82,15 @@ class LLMSingleSelector(BaseSelector):
         )
         return cls(service_context.llm_predictor, prompt)
 
+    def _get_prompts(self) -> Dict[str, Any]:
+        """Get prompts."""
+        return {"prompt": self._prompt}
+
+    def _update_prompts(self, prompts: PromptDictType) -> None:
+        """Update prompts."""
+        if "prompt" in prompts:
+            self._prompt = prompts["prompt"]
+
     def _select(
         self, choices: Sequence[ToolMetadata], query: QueryBundle
     ) -> SelectorResult:
@@ -86,7 +98,7 @@ class LLMSingleSelector(BaseSelector):
         choices_text = _build_choices_text(choices)
 
         # predict
-        prediction, _ = self._llm_predictor.predict(
+        prediction = self._llm_predictor.predict(
             prompt=self._prompt,
             num_choices=len(choices),
             context_list=choices_text,
@@ -105,7 +117,7 @@ class LLMSingleSelector(BaseSelector):
         choices_text = _build_choices_text(choices)
 
         # predict
-        prediction, _ = await self._llm_predictor.apredict(
+        prediction = await self._llm_predictor.apredict(
             prompt=self._prompt,
             num_choices=len(choices),
             context_list=choices_text,
@@ -119,7 +131,7 @@ class LLMSingleSelector(BaseSelector):
 
 
 class LLMMultiSelector(BaseSelector):
-    """LLM multi selector
+    """LLM multi selector.
 
     LLM-based selector that chooses multiple out of many options.
 
@@ -165,6 +177,15 @@ class LLMMultiSelector(BaseSelector):
         )
         return cls(service_context.llm_predictor, prompt, max_outputs)
 
+    def _get_prompts(self) -> Dict[str, Any]:
+        """Get prompts."""
+        return {"prompt": self._prompt}
+
+    def _update_prompts(self, prompts: PromptDictType) -> None:
+        """Update prompts."""
+        if "prompt" in prompts:
+            self._prompt = prompts["prompt"]
+
     def _select(
         self, choices: Sequence[ToolMetadata], query: QueryBundle
     ) -> SelectorResult:
@@ -172,7 +193,7 @@ class LLMMultiSelector(BaseSelector):
         context_list = _build_choices_text(choices)
         max_outputs = self._max_outputs or len(choices)
 
-        prediction, _ = self._llm_predictor.predict(
+        prediction = self._llm_predictor.predict(
             prompt=self._prompt,
             num_choices=len(choices),
             max_outputs=max_outputs,
@@ -191,7 +212,7 @@ class LLMMultiSelector(BaseSelector):
         context_list = _build_choices_text(choices)
         max_outputs = self._max_outputs or len(choices)
 
-        prediction, _ = await self._llm_predictor.apredict(
+        prediction = await self._llm_predictor.apredict(
             prompt=self._prompt,
             num_choices=len(choices),
             max_outputs=max_outputs,

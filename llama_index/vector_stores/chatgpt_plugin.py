@@ -5,45 +5,50 @@ from typing import Any, Dict, List, Optional
 
 import requests
 from requests.adapters import HTTPAdapter, Retry
-from tqdm.auto import tqdm
 
-from llama_index.data_structs.node import DocumentRelationship, Node
+from llama_index.schema import (
+    BaseNode,
+    MetadataMode,
+    NodeRelationship,
+    RelatedNodeInfo,
+    TextNode,
+)
+from llama_index.utils import get_tqdm_iterable
 from llama_index.vector_stores.types import (
-    NodeWithEmbedding,
     VectorStore,
     VectorStoreQuery,
     VectorStoreQueryResult,
 )
 
 
-def convert_docs_to_json(embedding_results: List[NodeWithEmbedding]) -> List[Dict]:
+def convert_docs_to_json(nodes: List[BaseNode]) -> List[Dict]:
     """Convert docs to JSON."""
     docs = []
-    for embedding_result in embedding_results:
+    for node in nodes:
         # TODO: add information for other fields as well
         # fields taken from
         # https://rb.gy/nmac9u
         doc_dict = {
-            "id": embedding_result.id,
-            "text": embedding_result.node.get_text(),
+            "id": node.node_id,
+            "text": node.get_content(metadata_mode=MetadataMode.NONE),
             # NOTE: this is the doc_id to reference document
-            "source_id": embedding_result.ref_doc_id,
+            "source_id": node.ref_doc_id,
             # "url": "...",
             # "created_at": ...,
             # "author": "..."",
         }
-        extra_info = embedding_result.node.extra_info
-        if extra_info is not None:
-            if "source" in extra_info:
-                doc_dict["source"] = extra_info["source"]
-            if "source_id" in extra_info:
-                doc_dict["source_id"] = extra_info["source_id"]
-            if "url" in extra_info:
-                doc_dict["url"] = extra_info["url"]
-            if "created_at" in extra_info:
-                doc_dict["created_at"] = extra_info["created_at"]
-            if "author" in extra_info:
-                doc_dict["author"] = extra_info["author"]
+        metadata = node.metadata
+        if metadata is not None:
+            if "source" in metadata:
+                doc_dict["source"] = metadata["source"]
+            if "source_id" in metadata:
+                doc_dict["source_id"] = metadata["source_id"]
+            if "url" in metadata:
+                doc_dict["url"] = metadata["url"]
+            if "created_at" in metadata:
+                doc_dict["created_at"] = metadata["created_at"]
+            if "author" in metadata:
+                doc_dict["author"] = metadata["author"]
 
         docs.append(doc_dict)
     return docs
@@ -84,17 +89,23 @@ class ChatGPTRetrievalPluginClient(VectorStore):
     @property
     def client(self) -> None:
         """Get client."""
-        return None
+        return
 
     def add(
         self,
-        embedding_results: List[NodeWithEmbedding],
+        nodes: List[BaseNode],
+        **add_kwargs: Any,
     ) -> List[str]:
-        """Add embedding_results to index."""
+        """Add nodes to index."""
         headers = {"Authorization": f"Bearer {self._bearer_token}"}
 
-        docs_to_upload = convert_docs_to_json(embedding_results)
-        for i in tqdm(range(0, len(docs_to_upload), self._batch_size)):
+        docs_to_upload = convert_docs_to_json(nodes)
+        iterable_docs = get_tqdm_iterable(
+            range(0, len(docs_to_upload), self._batch_size),
+            show_progress=True,
+            desc="Uploading documents",
+        )
+        for i in iterable_docs:
             i_end = min(i + self._batch_size, len(docs_to_upload))
             self._s.post(
                 f"{self._endpoint_url}/upsert",
@@ -102,7 +113,7 @@ class ChatGPTRetrievalPluginClient(VectorStore):
                 json={"documents": docs_to_upload[i:i_end]},
             )
 
-        return [result.id for result in embedding_results]
+        return [result.node_id for result in nodes]
 
     def delete(self, ref_doc_id: str, **delete_kwargs: Any) -> None:
         """
@@ -146,10 +157,14 @@ class ChatGPTRetrievalPluginClient(VectorStore):
                 result_txt = result["text"]
                 result_score = result["score"]
                 result_ref_doc_id = result["source_id"]
-                node = Node(
-                    doc_id=result_id,
+                node = TextNode(
+                    id_=result_id,
                     text=result_txt,
-                    relationships={DocumentRelationship.SOURCE: result_ref_doc_id},
+                    relationships={
+                        NodeRelationship.SOURCE: RelatedNodeInfo(
+                            node_id=result_ref_doc_id
+                        )
+                    },
                 )
                 nodes.append(node)
                 similarities.append(result_score)

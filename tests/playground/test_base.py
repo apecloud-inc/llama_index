@@ -3,17 +3,35 @@
 from typing import List
 
 import pytest
-
 from llama_index.embeddings.base import BaseEmbedding
-from llama_index.indices.list.base import ListIndex
+from llama_index.indices.list.base import SummaryIndex
 from llama_index.indices.service_context import ServiceContext
 from llama_index.indices.tree.base import TreeIndex
 from llama_index.indices.vector_store.base import VectorStoreIndex
 from llama_index.playground import DEFAULT_INDEX_CLASSES, DEFAULT_MODES, Playground
-from llama_index.readers.schema.base import Document
+from llama_index.schema import Document
 
 
 class MockEmbedding(BaseEmbedding):
+    @classmethod
+    def class_name(cls) -> str:
+        return "MockEmbedding"
+
+    async def _aget_query_embedding(self, query: str) -> List[float]:
+        del query
+        return [0, 0, 1, 0, 0]
+
+    async def _aget_text_embedding(self, text: str) -> List[float]:
+        # assume dimensions are 5
+        if text == "They're taking the Hobbits to Isengard!":
+            return [1, 0, 0, 0, 0]
+        elif text == "I can't carry it for you.":
+            return [0, 1, 0, 0, 0]
+        elif text == "But I can carry you!":
+            return [0, 0, 1, 0, 0]
+        else:
+            raise ValueError("Invalid text for `mock_get_text_embedding`.")
+
     def _get_text_embedding(self, text: str) -> List[float]:
         """Mock get text embedding."""
         # assume dimensions are 5
@@ -37,13 +55,13 @@ def test_get_set_compare(
 ) -> None:
     """Test basic comparison of indices."""
     mock_service_context.embed_model = MockEmbedding()
-    documents = [Document("They're taking the Hobbits to Isengard!")]
+    documents = [Document(text="They're taking the Hobbits to Isengard!")]
 
     indices = [
         VectorStoreIndex.from_documents(
             documents=documents, service_context=mock_service_context
         ),
-        ListIndex.from_documents(documents, service_context=mock_service_context),
+        SummaryIndex.from_documents(documents, service_context=mock_service_context),
         TreeIndex.from_documents(
             documents=documents, service_context=mock_service_context
         ),
@@ -72,8 +90,8 @@ def test_from_docs(
     """Test initialization via a list of documents."""
     mock_service_context.embed_model = MockEmbedding()
     documents = [
-        Document("I can't carry it for you."),
-        Document("But I can carry you!"),
+        Document(text="I can't carry it for you."),
+        Document(text="But I can carry you!"),
     ]
 
     playground = Playground.from_docs(
@@ -97,7 +115,9 @@ def test_validation() -> None:
         _ = Playground(indices=["VectorStoreIndex"])  # type: ignore
 
     with pytest.raises(ValueError):
-        _ = Playground(indices=[VectorStoreIndex, ListIndex, TreeIndex])  # type: ignore
+        _ = Playground(
+            indices=[VectorStoreIndex, SummaryIndex, TreeIndex]  # type: ignore
+        )
 
     with pytest.raises(ValueError):
         _ = Playground(indices=[])  # type: ignore

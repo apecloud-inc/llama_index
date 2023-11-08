@@ -1,13 +1,25 @@
 """OpenAI embeddings file."""
 
 from enum import Enum
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
-import openai
-from tenacity import retry, stop_after_attempt, wait_random_exponential
+from openai import AsyncOpenAI, OpenAI
 
+from llama_index.bridge.pydantic import Field, PrivateAttr
 from llama_index.callbacks.base import CallbackManager
 from llama_index.embeddings.base import DEFAULT_EMBED_BATCH_SIZE, BaseEmbedding
+from llama_index.llms.openai_utils import (
+    create_retry_decorator,
+    resolve_openai_credentials,
+)
+
+embedding_retry_decorator = create_retry_decorator(
+    max_retries=6,
+    random_exponential=True,
+    stop_after_delay_seconds=60,
+    min_seconds=1,
+    max_seconds=20,
+)
 
 
 class OpenAIEmbeddingMode(str, Enum):
@@ -89,10 +101,8 @@ _TEXT_MODE_MODEL_DICT = {
 }
 
 
-@retry(wait=wait_random_exponential(min=1, max=20), stop=stop_after_attempt(6))
-def get_embedding(
-    text: str, engine: Optional[str] = None, **kwargs: Any
-) -> List[float]:
+@embedding_retry_decorator
+def get_embedding(client: OpenAI, text: str, engine: str, **kwargs: Any) -> List[float]:
     """Get embedding.
 
     NOTE: Copied from OpenAI's embedding utils:
@@ -103,14 +113,15 @@ def get_embedding(
 
     """
     text = text.replace("\n", " ")
-    return openai.Embedding.create(input=[text], model=engine, **kwargs)["data"][0][
-        "embedding"
-    ]
+
+    return (
+        client.embeddings.create(input=[text], model=engine, **kwargs).data[0].embedding
+    )
 
 
-@retry(wait=wait_random_exponential(min=1, max=20), stop=stop_after_attempt(6))
+@embedding_retry_decorator
 async def aget_embedding(
-    text: str, engine: Optional[str] = None, **kwargs: Any
+    aclient: AsyncOpenAI, text: str, engine: str, **kwargs: Any
 ) -> List[float]:
     """Asynchronously get embedding.
 
@@ -121,17 +132,18 @@ async def aget_embedding(
     like matplotlib, plotly, scipy, sklearn.
 
     """
-    # replace newlines, which can negatively affect performance.
     text = text.replace("\n", " ")
 
-    return (await openai.Embedding.acreate(input=[text], model=engine, **kwargs))[
-        "data"
-    ][0]["embedding"]
+    return (
+        (await aclient.embeddings.create(input=[text], model=engine, **kwargs))
+        .data[0]
+        .embedding
+    )
 
 
-@retry(wait=wait_random_exponential(min=1, max=20), stop=stop_after_attempt(6))
+@embedding_retry_decorator
 def get_embeddings(
-    list_of_text: List[str], engine: Optional[str] = None, **kwargs: Any
+    client: OpenAI, list_of_text: List[str], engine: str, **kwargs: Any
 ) -> List[List[float]]:
     """Get embeddings.
 
@@ -144,16 +156,18 @@ def get_embeddings(
     """
     assert len(list_of_text) <= 2048, "The batch size should not be larger than 2048."
 
-    # replace newlines, which can negatively affect performance.
     list_of_text = [text.replace("\n", " ") for text in list_of_text]
 
-    data = openai.Embedding.create(input=list_of_text, model=engine, **kwargs).data
-    return [d["embedding"] for d in data]
+    data = client.embeddings.create(input=list_of_text, model=engine, **kwargs).data
+    return [d.embedding for d in data]
 
 
-@retry(wait=wait_random_exponential(min=1, max=20), stop=stop_after_attempt(6))
+@embedding_retry_decorator
 async def aget_embeddings(
-    list_of_text: List[str], engine: Optional[str] = None, **kwargs: Any
+    aclient: AsyncOpenAI,
+    list_of_text: List[str],
+    engine: str,
+    **kwargs: Any,
 ) -> List[List[float]]:
     """Asynchronously get embeddings.
 
@@ -166,13 +180,12 @@ async def aget_embeddings(
     """
     assert len(list_of_text) <= 2048, "The batch size should not be larger than 2048."
 
-    # replace newlines, which can negatively affect performance.
     list_of_text = [text.replace("\n", " ") for text in list_of_text]
 
     data = (
-        await openai.Embedding.acreate(input=list_of_text, model=engine, **kwargs)
+        await aclient.embeddings.create(input=list_of_text, model=engine, **kwargs)
     ).data
-    return [d["embedding"] for d in data]
+    return [d.embedding for d in data]
 
 
 def get_engine(
@@ -207,75 +220,135 @@ class OpenAIEmbedding(BaseEmbedding):
             - OpenAIEmbeddingModelType.BABBAGE
             - OpenAIEmbeddingModelType.ADA
             - OpenAIEmbeddingModelType.TEXT_EMBED_ADA_002
-
-        deployment_name (Optional[str]): Optional deployment of model. Defaults to None.
-            If this value is not None, mode and model will be ignored.
-            Only available for using AzureOpenAI.
     """
+
+    additional_kwargs: Dict[str, Any] = Field(
+        default_factory=dict, description="Additional kwargs for the OpenAI API."
+    )
+
+    api_key: str = Field(description="The OpenAI API key.")
+    api_base: str = Field(description="The base URL for OpenAI API.")
+    api_version: str = Field(description="The version for OpenAI API.")
+
+    max_retries: int = Field(
+        default=10, description="Maximum number of retries.", gte=0
+    )
+
+    _query_engine: OpenAIEmbeddingModeModel = PrivateAttr()
+    _text_engine: OpenAIEmbeddingModeModel = PrivateAttr()
+    _client: OpenAI = PrivateAttr()
+    _aclient: AsyncOpenAI = PrivateAttr()
 
     def __init__(
         self,
         mode: str = OpenAIEmbeddingMode.TEXT_SEARCH_MODE,
         model: str = OpenAIEmbeddingModelType.TEXT_EMBED_ADA_002,
-        deployment_name: Optional[str] = None,
         embed_batch_size: int = DEFAULT_EMBED_BATCH_SIZE,
-        tokenizer: Optional[Callable] = None,
+        additional_kwargs: Optional[Dict[str, Any]] = None,
+        api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
+        api_version: Optional[str] = None,
+        max_retries: int = 10,
         callback_manager: Optional[CallbackManager] = None,
         **kwargs: Any,
     ) -> None:
-        """Init params."""
-        super().__init__(embed_batch_size, tokenizer, callback_manager)
-        self.deployment_name = deployment_name
-        self.query_engine = get_engine(mode, model, _QUERY_MODE_MODEL_DICT)
-        self.text_engine = get_engine(mode, model, _TEXT_MODE_MODEL_DICT)
-        self.openai_kwargs = kwargs
+        additional_kwargs = additional_kwargs or {}
+
+        api_key, api_base, api_version = resolve_openai_credentials(
+            api_key=api_key,
+            api_base=api_base,
+            api_version=api_version,
+        )
+
+        self._query_engine = get_engine(mode, model, _QUERY_MODE_MODEL_DICT)
+        self._text_engine = get_engine(mode, model, _TEXT_MODE_MODEL_DICT)
+
+        super().__init__(
+            embed_batch_size=embed_batch_size,
+            callback_manager=callback_manager,
+            model_name=model,
+            additional_kwargs=additional_kwargs,
+            api_key=api_key,
+            api_base=api_base,
+            api_version=api_version,
+            max_retries=max_retries,
+            **kwargs,
+        )
+
+        # NOTE: init after super to use class attributes + helper function
+        self._client, self._aclient = self._get_clients()
+
+    def _get_clients(self) -> Tuple[OpenAI, AsyncOpenAI]:
+        client = OpenAI(**self._get_credential_kwargs())
+        aclient = AsyncOpenAI(**self._get_credential_kwargs())
+        return client, aclient
+
+    @classmethod
+    def class_name(cls) -> str:
+        return "OpenAIEmbedding"
+
+    def _get_credential_kwargs(self) -> Dict[str, Any]:
+        return {
+            "api_key": self.api_key,
+            "base_url": self.api_base,
+            "max_retries": self.max_retries,
+        }
 
     def _get_query_embedding(self, query: str) -> List[float]:
         """Get query embedding."""
         return get_embedding(
+            self._client,
             query,
-            engine=self.query_engine,
-            deployment_id=self.deployment_name,
-            **self.openai_kwargs,
+            engine=self._query_engine,
+            **self.additional_kwargs,
+        )
+
+    async def _aget_query_embedding(self, query: str) -> List[float]:
+        """The asynchronous version of _get_query_embedding."""
+        return await aget_embedding(
+            self._aclient,
+            query,
+            engine=self._query_engine,
+            **self.additional_kwargs,
         )
 
     def _get_text_embedding(self, text: str) -> List[float]:
         """Get text embedding."""
         return get_embedding(
+            self._client,
             text,
-            engine=self.text_engine,
-            deployment_id=self.deployment_name,
-            **self.openai_kwargs,
+            engine=self._text_engine,
+            **self.additional_kwargs,
         )
 
     async def _aget_text_embedding(self, text: str) -> List[float]:
         """Asynchronously get text embedding."""
         return await aget_embedding(
+            self._aclient,
             text,
-            engine=self.text_engine,
-            deployment_id=self.deployment_name,
-            **self.openai_kwargs,
+            engine=self._text_engine,
+            **self.additional_kwargs,
         )
 
     def _get_text_embeddings(self, texts: List[str]) -> List[List[float]]:
         """Get text embeddings.
 
         By default, this is a wrapper around _get_text_embedding.
-        Can be overriden for batch queries.
+        Can be overridden for batch queries.
 
         """
         return get_embeddings(
+            self._client,
             texts,
-            engine=self.text_engine,
-            deployment_id=self.deployment_name,
-            **self.openai_kwargs,
+            engine=self._text_engine,
+            **self.additional_kwargs,
         )
 
     async def _aget_text_embeddings(self, texts: List[str]) -> List[List[float]]:
         """Asynchronously get text embeddings."""
         return await aget_embeddings(
+            self._aclient,
             texts,
-            engine=self.text_engine,
-            deployment_id=self.deployment_name,
-            **self.openai_kwargs,
+            engine=self._text_engine,
+            **self.additional_kwargs,
         )

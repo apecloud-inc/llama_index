@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, cast
 
 from llama_index.readers.base import BaseReader
-from llama_index.readers.schema.base import Document
+from llama_index.schema import Document
 
 
 class MarkdownReader(BaseReader):
@@ -65,7 +65,7 @@ class MarkdownReader(BaseReader):
             ]
         else:
             markdown_tups = [
-                (key, re.sub("\n", "", value)) for key, value in markdown_tups
+                (key, re.sub("<.*?>", "", value)) for key, value in markdown_tups
             ]
 
         return markdown_tups
@@ -73,14 +73,12 @@ class MarkdownReader(BaseReader):
     def remove_images(self, content: str) -> str:
         """Get a dictionary of a markdown file from its path."""
         pattern = r"!{1}\[\[(.*)\]\]"
-        content = re.sub(pattern, "", content)
-        return content
+        return re.sub(pattern, "", content)
 
     def remove_hyperlinks(self, content: str) -> str:
         """Get a dictionary of a markdown file from its path."""
         pattern = r"\[(.*?)\]\((.*?)\)"
-        content = re.sub(pattern, r"\1", content)
-        return content
+        return re.sub(pattern, r"\1", content)
 
     def _init_parser(self) -> Dict:
         """Initialize the parser with the config."""
@@ -90,14 +88,13 @@ class MarkdownReader(BaseReader):
         self, filepath: Path, errors: str = "ignore"
     ) -> List[Tuple[Optional[str], str]]:
         """Parse file into tuples."""
-        with open(filepath, "r", encoding="utf-8") as f:
+        with open(filepath, encoding="utf-8") as f:
             content = f.read()
         if self._remove_hyperlinks:
             content = self.remove_hyperlinks(content)
         if self._remove_images:
             content = self.remove_images(content)
-        markdown_tups = self.markdown_to_tups(content)
-        return markdown_tups
+        return self.markdown_to_tups(content)
 
     def load_data(
         self, file: Path, extra_info: Optional[Dict] = None
@@ -108,9 +105,9 @@ class MarkdownReader(BaseReader):
         # TODO: don't include headers right now
         for header, value in tups:
             if header is None:
-                results.append(Document(value, extra_info=extra_info))
+                results.append(Document(text=value, metadata=extra_info or {}))
             else:
                 results.append(
-                    Document(f"\n\n{header}\n{value}", extra_info=extra_info)
+                    Document(text=f"\n\n{header}\n{value}", metadata=extra_info or {})
                 )
         return results

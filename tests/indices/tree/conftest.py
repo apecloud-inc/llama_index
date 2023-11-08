@@ -1,7 +1,8 @@
 from typing import Dict, List, Tuple
-import pytest
 
-from llama_index.readers.schema.base import Document
+import pytest
+from llama_index.schema import Document
+
 from tests.mock_utils.mock_prompts import (
     MOCK_INSERT_PROMPT,
     MOCK_QUERY_PROMPT,
@@ -11,7 +12,7 @@ from tests.mock_utils.mock_prompts import (
 )
 
 
-@pytest.fixture
+@pytest.fixture()
 def documents() -> List[Document]:
     """Get documents."""
     # NOTE: one document for now
@@ -21,10 +22,10 @@ def documents() -> List[Document]:
         "This is another test.\n"
         "This is a test v2."
     )
-    return [Document(doc_text)]
+    return [Document(text=doc_text)]
 
 
-@pytest.fixture
+@pytest.fixture()
 def struct_kwargs() -> Tuple[Dict, Dict]:
     """Index kwargs."""
     index_kwargs = {

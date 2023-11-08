@@ -1,16 +1,17 @@
 """Utilities for GPT indices."""
 import logging
 import re
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Dict, List, Optional, Sequence, Set, Tuple
 
-from llama_index.data_structs.node import Node
+from llama_index.embeddings.base import BaseEmbedding
+from llama_index.schema import BaseNode, MetadataMode
 from llama_index.utils import globals_helper, truncate_text
 from llama_index.vector_stores.types import VectorStoreQueryResult
 
 _logger = logging.getLogger(__name__)
 
 
-def get_sorted_node_list(node_dict: Dict[int, Node]) -> List[Node]:
+def get_sorted_node_list(node_dict: Dict[int, BaseNode]) -> List[BaseNode]:
     """Get sorted node list. Used by tree-strutured indices."""
     sorted_indices = sorted(node_dict.keys())
     return [node_dict[index] for index in sorted_indices]
@@ -58,14 +59,14 @@ def log_vector_store_query_result(
     fmt_txts = []
     for node_idx, node_similarity, node in zip(result.ids, similarities, result.nodes):
         fmt_txt = f"> [Node {node_idx}] [Similarity score: \
-            {float(node_similarity):.6}] {truncate_text(node.get_text(), 100)}"
+            {float(node_similarity):.6}] {truncate_text(node.get_content(), 100)}"
         fmt_txts.append(fmt_txt)
     top_k_node_text = "\n".join(fmt_txts)
     logger.debug(f"> Top {len(result.nodes)} nodes:\n{top_k_node_text}")
 
 
 def default_format_node_batch_fn(
-    summary_nodes: List[Node],
+    summary_nodes: List[BaseNode],
 ) -> str:
     """Default format node batch function.
 
@@ -75,13 +76,16 @@ def default_format_node_batch_fn(
     fmt_node_txts = []
     for idx in range(len(summary_nodes)):
         number = idx + 1
-        fmt_node_txts.append(f"Document {number}:\n{summary_nodes[idx].get_text()}")
+        fmt_node_txts.append(
+            f"Document {number}:\n"
+            f"{summary_nodes[idx].get_content(metadata_mode=MetadataMode.LLM)}"
+        )
     return "\n\n".join(fmt_node_txts)
 
 
 def default_parse_choice_select_answer_fn(
     answer: str, num_choices: int, raise_error: bool = False
-) -> Tuple[List[int], Optional[List[float]]]:
+) -> Tuple[List[int], List[float]]:
     """Default parse choice select answer function."""
     answer_lines = answer.split("\n")
     answer_nums = []
@@ -103,3 +107,71 @@ def default_parse_choice_select_answer_fn(
         answer_nums.append(answer_num)
         answer_relevances.append(float(line_tokens[1].split(":")[1].strip()))
     return answer_nums, answer_relevances
+
+
+def embed_nodes(
+    nodes: Sequence[BaseNode], embed_model: BaseEmbedding, show_progress: bool = False
+) -> Dict[str, List[float]]:
+    """Get embeddings of the given nodes, run embedding model if necessary.
+
+    Args:
+        nodes (Sequence[BaseNode]): The nodes to embed.
+        embed_model (BaseEmbedding): The embedding model to use.
+        show_progress (bool): Whether to show progress bar.
+
+    Returns:
+        Dict[str, List[float]]: A map from node id to embedding.
+    """
+    id_to_embed_map: Dict[str, List[float]] = {}
+
+    texts_to_embed = []
+    ids_to_embed = []
+    for node in nodes:
+        if node.embedding is None:
+            ids_to_embed.append(node.node_id)
+            texts_to_embed.append(node.get_content(metadata_mode=MetadataMode.EMBED))
+        else:
+            id_to_embed_map[node.node_id] = node.embedding
+
+    new_embeddings = embed_model.get_text_embedding_batch(
+        texts_to_embed, show_progress=show_progress
+    )
+
+    for new_id, text_embedding in zip(ids_to_embed, new_embeddings):
+        id_to_embed_map[new_id] = text_embedding
+
+    return id_to_embed_map
+
+
+async def async_embed_nodes(
+    nodes: Sequence[BaseNode], embed_model: BaseEmbedding, show_progress: bool = False
+) -> Dict[str, List[float]]:
+    """Async get embeddings of the given nodes, run embedding model if necessary.
+
+    Args:
+        nodes (Sequence[BaseNode]): The nodes to embed.
+        embed_model (BaseEmbedding): The embedding model to use.
+        show_progress (bool): Whether to show progress bar.
+
+    Returns:
+        Dict[str, List[float]]: A map from node id to embedding.
+    """
+    id_to_embed_map: Dict[str, List[float]] = {}
+
+    texts_to_embed = []
+    ids_to_embed = []
+    for node in nodes:
+        if node.embedding is None:
+            ids_to_embed.append(node.node_id)
+            texts_to_embed.append(node.get_content(metadata_mode=MetadataMode.EMBED))
+        else:
+            id_to_embed_map[node.node_id] = node.embedding
+
+    new_embeddings = await embed_model.aget_text_embedding_batch(
+        texts_to_embed, show_progress=show_progress
+    )
+
+    for new_id, text_embedding in zip(ids_to_embed, new_embeddings):
+        id_to_embed_map[new_id] = text_embedding
+
+    return id_to_embed_map

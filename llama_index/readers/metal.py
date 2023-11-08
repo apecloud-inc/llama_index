@@ -1,7 +1,7 @@
 from typing import Any, Dict, List, Optional
 
 from llama_index.readers.base import BaseReader
-from llama_index.readers.schema.base import Document
+from llama_index.schema import Document
 
 
 class MetalReader(BaseReader):
@@ -18,7 +18,7 @@ class MetalReader(BaseReader):
             "`metal_sdk` package not found, please run `pip install metal_sdk`"
         )
         try:
-            import metal_sdk  # noqa: F401
+            import metal_sdk  # noqa
         except ImportError:
             raise ImportError(import_err_msg)
         from metal_sdk.metal import Metal
@@ -50,7 +50,6 @@ class MetalReader(BaseReader):
         Returns:
             List[Document]: A list of documents.
         """
-
         payload = {
             "embedding": query_embedding,
             "filters": filters,
@@ -63,7 +62,7 @@ class MetalReader(BaseReader):
             documents.append(Document(text=text))
 
         if not separate_documents:
-            text_list = [doc.get_text() for doc in documents]
+            text_list = [doc.get_content() for doc in documents]
             text = "\n\n".join(text_list)
             documents = [Document(text=text)]
 

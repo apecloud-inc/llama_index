@@ -3,9 +3,9 @@ from typing import Any, Dict, Tuple
 
 from IPython.display import Markdown, display
 
-from llama_index.data_structs.node import ImageNode, NodeWithScore
 from llama_index.img_utils import b64_2_img
 from llama_index.response.schema import Response
+from llama_index.schema import ImageNode, MetadataMode, NodeWithScore
 from llama_index.utils import truncate_text
 
 DEFAULT_THUMBNAIL_SIZE = (512, 512)
@@ -18,14 +18,23 @@ def display_image(img_str: str, size: Tuple[int, int] = DEFAULT_THUMBNAIL_SIZE) 
     display(img)
 
 
-def display_source_node(source_node: NodeWithScore, source_length: int = 100) -> None:
+def display_source_node(
+    source_node: NodeWithScore,
+    source_length: int = 100,
+    show_source_metadata: bool = False,
+    metadata_mode: MetadataMode = MetadataMode.NONE,
+) -> None:
     """Display source node for jupyter notebook."""
-    source_text_fmt = truncate_text(source_node.node.get_text().strip(), source_length)
+    source_text_fmt = truncate_text(
+        source_node.node.get_content(metadata_mode=metadata_mode).strip(), source_length
+    )
     text_md = (
-        f"**Document ID:** {source_node.node.doc_id}<br>"
+        f"**Node ID:** {source_node.node.node_id}<br>"
         f"**Similarity:** {source_node.score}<br>"
         f"**Text:** {source_text_fmt}<br>"
     )
+    if show_source_metadata:
+        text_md += f"**Metadata:** {source_node.node.metadata}<br>"
     if isinstance(source_node.node, ImageNode):
         text_md += "**Image:**"
 
@@ -34,16 +43,17 @@ def display_source_node(source_node: NodeWithScore, source_length: int = 100) ->
         display_image(source_node.node.image)
 
 
-def display_extra_info(extra_info: Dict[str, Any]) -> None:
-    """Display extra info for jupyter notebook."""
-    display(extra_info)
+def display_metadata(metadata: Dict[str, Any]) -> None:
+    """Display metadata for jupyter notebook."""
+    display(metadata)
 
 
 def display_response(
     response: Response,
     source_length: int = 100,
     show_source: bool = False,
-    show_extra_info: bool = False,
+    show_metadata: bool = False,
+    show_source_metadata: bool = False,
 ) -> None:
     """Display response for jupyter notebook."""
     if response.response is None:
@@ -58,7 +68,11 @@ def display_response(
             display(
                 Markdown(f"**`Source Node {ind + 1}/{len(response.source_nodes)}`**")
             )
-            display_source_node(source_node, source_length=source_length)
-    if show_extra_info:
-        if response.extra_info is not None:
-            display_extra_info(response.extra_info)
+            display_source_node(
+                source_node,
+                source_length=source_length,
+                show_source_metadata=show_source_metadata,
+            )
+    if show_metadata:
+        if response.metadata is not None:
+            display_metadata(response.metadata)

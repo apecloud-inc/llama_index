@@ -4,11 +4,11 @@ from typing import Any, Dict, List, Tuple
 from unittest.mock import patch
 
 import pytest
-from llama_index.data_structs.node import Node
 from llama_index.embeddings.base import BaseEmbedding
 from llama_index.indices.knowledge_graph.base import KnowledgeGraphIndex
 from llama_index.indices.service_context import ServiceContext
-from llama_index.readers.schema.base import Document
+from llama_index.schema import Document, TextNode
+
 from tests.mock_utils.mock_prompts import (
     MOCK_KG_TRIPLET_EXTRACT_PROMPT,
     MOCK_QUERY_KEYWORD_EXTRACT_PROMPT,
@@ -16,6 +16,27 @@ from tests.mock_utils.mock_prompts import (
 
 
 class MockEmbedding(BaseEmbedding):
+    @classmethod
+    def class_name(cls) -> str:
+        return "MockEmbedding"
+
+    async def _aget_query_embedding(self, query: str) -> List[float]:
+        del query
+        return [0, 0, 1, 0, 0]
+
+    async def _aget_text_embedding(self, text: str) -> List[float]:
+        # assume dimensions are 4
+        if text == "('foo', 'is', 'bar')":
+            return [1, 0, 0, 0]
+        elif text == "('hello', 'is not', 'world')":
+            return [0, 1, 0, 0]
+        elif text == "('Jane', 'is mother of', 'Bob')":
+            return [0, 0, 1, 0]
+        elif text == "foo":
+            return [0, 0, 0, 1]
+        else:
+            raise ValueError("Invalid text for `mock_get_text_embedding`.")
+
     def _get_text_embedding(self, text: str) -> List[float]:
         """Mock get text embedding."""
         # assume dimensions are 4
@@ -36,7 +57,7 @@ class MockEmbedding(BaseEmbedding):
         return [0, 0, 1, 0, 0]
 
 
-@pytest.fixture
+@pytest.fixture()
 def struct_kwargs() -> Tuple[Dict, Dict]:
     """Index kwargs."""
     index_kwargs = {
@@ -75,7 +96,7 @@ def test_build_kg_manual(
         ("hello", "is not", "world"),
         ("Jane", "is mother of", "Bob"),
     ]
-    nodes = [Node(str(tup)) for tup in tuples]
+    nodes = [TextNode(text=str(tup)) for tup in tuples]
     for tup, node in zip(tuples, nodes):
         # add node
         index.add_node([tup[0], tup[2]], node)
@@ -83,8 +104,8 @@ def test_build_kg_manual(
         index.upsert_triplet(tup)
 
     # NOTE: in these unit tests, document text == triplets
-    nodes = index.docstore.get_nodes(list(index.index_struct.node_ids))
-    table_chunks = {n.get_text() for n in nodes}
+    docstore_nodes = index.docstore.get_nodes(list(index.index_struct.node_ids))
+    table_chunks = {n.get_content() for n in docstore_nodes}
     assert len(table_chunks) == 3
     assert "('foo', 'is', 'bar')" in table_chunks
     assert "('hello', 'is not', 'world')" in table_chunks
@@ -108,13 +129,13 @@ def test_build_kg_manual(
         ("hello", "is not", "world"),
         ("Jane", "is mother of", "Bob"),
     ]
-    nodes = [Node(str(tup)) for tup in tuples]
+    nodes = [TextNode(text=str(tup)) for tup in tuples]
     for tup, node in zip(tuples, nodes):
         index.upsert_triplet_and_node(tup, node)
 
     # NOTE: in these unit tests, document text == triplets
-    nodes = index.docstore.get_nodes(list(index.index_struct.node_ids))
-    table_chunks = {n.get_text() for n in nodes}
+    docstore_nodes = index.docstore.get_nodes(list(index.index_struct.node_ids))
+    table_chunks = {n.get_content() for n in docstore_nodes}
     assert len(table_chunks) == 3
     assert "('foo', 'is', 'bar')" in table_chunks
     assert "('hello', 'is not', 'world')" in table_chunks
@@ -133,7 +154,7 @@ def test_build_kg_manual(
 
     # try inserting same node twice
     index = KnowledgeGraphIndex([], service_context=mock_service_context)
-    node = Node(str(("foo", "is", "bar")), doc_id="test_node")
+    node = TextNode(text=str(("foo", "is", "bar")), id_="test_node")
     index.upsert_triplet_and_node(tup, node)
     index.upsert_triplet_and_node(tup, node)
 
@@ -175,7 +196,7 @@ def test_build_kg(
     )
     # NOTE: in these unit tests, document text == triplets
     nodes = index.docstore.get_nodes(list(index.index_struct.node_ids))
-    table_chunks = {n.get_text() for n in nodes}
+    table_chunks = {n.get_content() for n in nodes}
     assert len(table_chunks) == 3
     assert "(foo, is, bar)" in table_chunks
     assert "(hello, is not, world)" in table_chunks
@@ -196,4 +217,4 @@ def test_build_kg(
     all_ref_doc_info = index.ref_doc_info
     assert len(all_ref_doc_info) == 1
     for ref_doc_info in all_ref_doc_info.values():
-        assert len(ref_doc_info.doc_ids) == 3
+        assert len(ref_doc_info.node_ids) == 3

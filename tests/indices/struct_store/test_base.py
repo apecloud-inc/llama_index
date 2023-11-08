@@ -2,6 +2,22 @@
 
 from typing import Any, Dict, List, Tuple
 
+from llama_index.indices.list.base import SummaryIndex
+from llama_index.indices.query.schema import QueryBundle
+from llama_index.indices.service_context import ServiceContext
+from llama_index.indices.struct_store.sql import (
+    SQLContextContainerBuilder,
+    SQLStructStoreIndex,
+)
+from llama_index.indices.struct_store.sql_query import NLStructStoreQueryEngine
+from llama_index.schema import (
+    BaseNode,
+    Document,
+    NodeRelationship,
+    RelatedNodeInfo,
+    TextNode,
+)
+from llama_index.utilities.sql_wrapper import SQLDatabase
 from sqlalchemy import (
     Column,
     Integer,
@@ -13,27 +29,14 @@ from sqlalchemy import (
     select,
 )
 
-from llama_index.data_structs.node import DocumentRelationship, Node
-from llama_index.indices.list.base import ListIndex
-from llama_index.indices.query.schema import QueryBundle
-from llama_index.indices.service_context import ServiceContext
-from llama_index.indices.struct_store.sql import (
-    SQLStructStoreIndex,
-    SQLContextContainerBuilder,
-)
-from llama_index.indices.struct_store.sql_query import NLStructStoreQueryEngine
-from llama_index.langchain_helpers.sql_wrapper import SQLDatabase
-from llama_index.readers.schema.base import Document
-from llama_index.schema import BaseDocument
 from tests.mock_utils.mock_prompts import MOCK_TABLE_CONTEXT_PROMPT
 
 
 def _delete_table_items(engine: Any, table: Table) -> None:
     """Delete items from a table."""
     delete_stmt = delete(table)
-    with engine.connect() as connection:
+    with engine.begin() as connection:
         connection.execute(delete_stmt)
-        connection.commit()
 
 
 def test_sql_index(
@@ -65,7 +68,7 @@ def test_sql_index(
     assert isinstance(index, SQLStructStoreIndex)
 
     # test that the document is inserted
-    stmt = select(test_table.c["user_id", "foo"])
+    stmt = select(test_table.c.user_id, test_table.c.foo)
     engine = index.sql_database.engine
     with engine.connect() as connection:
         results = connection.execute(stmt).fetchall()
@@ -80,11 +83,10 @@ def test_sql_index(
     )
     assert isinstance(index, SQLStructStoreIndex)
     # test that the document is inserted
-    stmt = select(test_table.c["user_id", "foo"])
+    stmt = select(test_table.c.user_id, test_table.c.foo)
     engine = index.sql_database.engine
-    with engine.connect() as connection:
+    with engine.begin() as connection:
         results = connection.execute(stmt).fetchall()
-        connection.commit()
         assert results == [(8, "hello")]
 
 
@@ -108,13 +110,13 @@ def test_sql_index_nodes(
 
     # try with different parent ids
     nodes = [
-        Node(
+        TextNode(
             text="user_id:2,foo:bar",
-            relationships={DocumentRelationship.SOURCE: "test"},
+            relationships={NodeRelationship.SOURCE: RelatedNodeInfo(node_id="test1")},
         ),
-        Node(
+        TextNode(
             text="user_id:8,foo:hello",
-            relationships={DocumentRelationship.SOURCE: "test2"},
+            relationships={NodeRelationship.SOURCE: RelatedNodeInfo(node_id="test2")},
         ),
     ]
     sql_database = SQLDatabase(engine, metadata=metadata_obj)
@@ -128,7 +130,7 @@ def test_sql_index_nodes(
     assert isinstance(index, SQLStructStoreIndex)
 
     # test that both nodes are inserted
-    stmt = select(test_table.c["user_id", "foo"])
+    stmt = select(test_table.c.user_id, test_table.c.foo)
     engine = index.sql_database.engine
     with engine.connect() as connection:
         results = connection.execute(stmt).fetchall()
@@ -139,13 +141,13 @@ def test_sql_index_nodes(
 
     # try with same parent ids
     nodes = [
-        Node(
+        TextNode(
             text="user_id:2,foo:bar",
-            relationships={DocumentRelationship.SOURCE: "test"},
+            relationships={NodeRelationship.SOURCE: RelatedNodeInfo(node_id="test1")},
         ),
-        Node(
+        TextNode(
             text="user_id:8,foo:hello",
-            relationships={DocumentRelationship.SOURCE: "test"},
+            relationships={NodeRelationship.SOURCE: RelatedNodeInfo(node_id="test1")},
         ),
     ]
     sql_database = SQLDatabase(engine, metadata=metadata_obj)
@@ -159,7 +161,7 @@ def test_sql_index_nodes(
     assert isinstance(index, SQLStructStoreIndex)
 
     # test that only one node (the last one) is inserted
-    stmt = select(test_table.c["user_id", "foo"])
+    stmt = select(test_table.c.user_id, test_table.c.foo)
     engine = index.sql_database.engine
     with engine.connect() as connection:
         results = connection.execute(stmt).fetchall()
@@ -230,8 +232,8 @@ def test_sql_index_with_context(
     # test setting sql_context_builder
     sql_database = SQLDatabase(engine)
     # this should cause the mock QuestionAnswer prompt to run
-    context_documents_dict: Dict[str, List[BaseDocument]] = {
-        "test_table": [Document("test_table_context")]
+    context_documents_dict: Dict[str, List[BaseNode]] = {
+        "test_table": [Document(text="test_table_context")]
     }
     sql_context_builder = SQLContextContainerBuilder.from_documents(
         context_documents_dict,
@@ -279,10 +281,10 @@ def test_sql_index_with_derive_index(mock_service_context: ServiceContext) -> No
         sql_database, context_dict=table_context_dict
     )
     context_index_no_ignore = context_builder.derive_index_from_context(
-        ListIndex,
+        SummaryIndex,
     )
     context_index_with_ignore = context_builder.derive_index_from_context(
-        ListIndex, ignore_db_schema=True
+        SummaryIndex, ignore_db_schema=True
     )
     assert len(context_index_with_ignore.index_struct.nodes) == 1
     assert len(context_index_no_ignore.index_struct.nodes) > 1
@@ -314,7 +316,7 @@ def test_sql_index_with_index_context(
         sql_database, context_dict=table_context_dict
     )
     context_index = context_builder.derive_index_from_context(
-        ListIndex, ignore_db_schema=True
+        SummaryIndex, ignore_db_schema=True
     )
     # NOTE: the response only contains the first line (metadata), since
     # with the mock patch, newlines are treated as separate calls.

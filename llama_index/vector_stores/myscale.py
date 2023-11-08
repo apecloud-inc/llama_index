@@ -7,18 +7,24 @@ import json
 import logging
 from typing import Any, Dict, List, Optional, cast
 
-from llama_index.data_structs.node import DocumentRelationship, Node
 from llama_index.indices.service_context import ServiceContext
 from llama_index.readers.myscale import (
     MyScaleSettings,
     escape_str,
     format_list_to_string,
 )
+from llama_index.schema import (
+    BaseNode,
+    MetadataMode,
+    NodeRelationship,
+    RelatedNodeInfo,
+    TextNode,
+)
 from llama_index.utils import iter_batch
 from llama_index.vector_stores.types import (
-    NodeWithEmbedding,
     VectorStore,
     VectorStoreQuery,
+    VectorStoreQueryMode,
     VectorStoreQueryResult,
 )
 
@@ -57,13 +63,17 @@ class MyScaleVectorStore(VectorStore):
 
     stores_text: bool = True
     _index_existed: bool = False
+    metadata_column: str = "metadata"
+    AMPLIFY_RATIO_LE5 = 100
+    AMPLIFY_RATIO_GT5 = 20
+    AMPLIFY_RATIO_GT50 = 10
 
     def __init__(
         self,
         myscale_client: Optional[Any] = None,
         table: str = "llama_index",
         database: str = "default",
-        index_type: str = "IVFFLAT",
+        index_type: str = "MSTG",
         metric: str = "cosine",
         batch_size: int = 32,
         index_params: Optional[dict] = None,
@@ -73,11 +83,11 @@ class MyScaleVectorStore(VectorStore):
     ) -> None:
         """Initialize params."""
         import_err_msg = """
-            `clickhouse_connect` package not found, 
+            `clickhouse_connect` package not found,
             please run `pip install clickhouse-connect`
         """
         try:
-            from clickhouse_connect.driver.httpclient import HttpClient  # noqa: F401
+            from clickhouse_connect.driver.httpclient import HttpClient
         except ImportError:
             raise ImportError(import_err_msg)
 
@@ -98,23 +108,25 @@ class MyScaleVectorStore(VectorStore):
 
         # schema column name, type, and construct format method
         self.column_config: Dict = {
-            "id": {"type": "String", "extract_func": lambda x: x.id},
+            "id": {"type": "String", "extract_func": lambda x: x.node_id},
             "doc_id": {"type": "String", "extract_func": lambda x: x.ref_doc_id},
             "text": {
                 "type": "String",
-                "extract_func": lambda x: escape_str(x.node.text or ""),
+                "extract_func": lambda x: escape_str(
+                    x.get_content(metadata_mode=MetadataMode.NONE) or ""
+                ),
             },
             "vector": {
                 "type": "Array(Float32)",
-                "extract_func": lambda x: format_list_to_string(x.embedding),
+                "extract_func": lambda x: format_list_to_string(x.get_embedding()),
             },
             "node_info": {
                 "type": "JSON",
-                "extract_func": lambda x: json.dumps(x.node.node_info),
+                "extract_func": lambda x: json.dumps(x.node_info),
             },
-            "extra_info": {
+            "metadata": {
                 "type": "JSON",
-                "extract_func": lambda x: json.dumps(x.node.extra_info),
+                "extract_func": lambda x: json.dumps(x.metadata),
             },
         }
 
@@ -140,7 +152,7 @@ class MyScaleVectorStore(VectorStore):
             CREATE TABLE IF NOT EXISTS {self.config.database}.{self.config.table}(
                 {",".join([f'{k} {v["type"]}' for k, v in self.column_config.items()])},
                 CONSTRAINT vector_length CHECK length(vector) = {dimension},
-                VECTOR INDEX {self.config.table}_index vector TYPE 
+                VECTOR INDEX {self.config.table}_index vector TYPE
                 {self.config.index_type}('metric_type={self.config.metric}'{index_params})
             ) ENGINE = MergeTree ORDER BY id
             """
@@ -151,7 +163,7 @@ class MyScaleVectorStore(VectorStore):
 
     def _build_insert_statement(
         self,
-        values: List[NodeWithEmbedding],
+        values: List[BaseNode],
     ) -> str:
         _data = []
         for item in values:
@@ -163,36 +175,64 @@ class MyScaleVectorStore(VectorStore):
             )
             _data.append(f"({item_value_str})")
 
-        insert_statement = f"""
-                INSERT INTO TABLE 
+        return f"""
+                INSERT INTO TABLE
                     {self.config.database}.{self.config.table}({",".join(self.column_config.keys())})
                 VALUES
                     {','.join(_data)}
                 """
-        return insert_statement
+
+    def _build_hybrid_search_statement(
+        self, stage_one_sql: str, query_str: str, similarity_top_k: int
+    ) -> str:
+        terms_pattern = [f"(?i){x}" for x in query_str.split(" ")]
+        column_keys = self.column_config.keys()
+        return (
+            f"SELECT {','.join(filter(lambda k: k != 'vector', column_keys))}, "
+            f"dist FROM ({stage_one_sql}) tempt "
+            f"ORDER BY length(multiMatchAllIndices(text, {terms_pattern})) "
+            f"AS distance1 DESC, "
+            f"log(1 + countMatches(text, '(?i)({query_str.replace(' ', '|')})')) "
+            f"AS distance2 DESC limit {similarity_top_k}"
+        )
+
+    def _append_meta_filter_condition(
+        self, where_str: Optional[str], exact_match_filter: list
+    ) -> str:
+        filter_str = " AND ".join(
+            f"JSONExtractString(toJSONString("
+            f"{self.metadata_column}), '{filter_item.key}') "
+            f"= '{filter_item.value}'"
+            for filter_item in exact_match_filter
+        )
+        if where_str is None:
+            where_str = filter_str
+        else:
+            where_str = " AND " + filter_str
+        return where_str
 
     def add(
         self,
-        embedding_results: List[NodeWithEmbedding],
+        nodes: List[BaseNode],
+        **add_kwargs: Any,
     ) -> List[str]:
-        """Add embedding results to index.
+        """Add nodes to index.
 
-        Args
-            embedding_results: List[NodeWithEmbedding]: list of embedding results
+        Args:
+            nodes: List[BaseNode]: list of nodes with embeddings
 
         """
-
-        if not embedding_results:
+        if not nodes:
             return []
 
         if not self._index_existed:
-            self._create_index(len(embedding_results[0].embedding))
+            self._create_index(len(nodes[0].get_embedding()))
 
-        for result_batch in iter_batch(embedding_results, self.config.batch_size):
+        for result_batch in iter_batch(nodes, self.config.batch_size):
             insert_statement = self._build_insert_statement(values=result_batch)
             self._client.command(insert_statement)
 
-        return [result.id for result in embedding_results]
+        return [result.node_id for result in nodes]
 
     def delete(self, ref_doc_id: str, **delete_kwargs: Any) -> None:
         """
@@ -202,10 +242,13 @@ class MyScaleVectorStore(VectorStore):
             ref_doc_id (str): The doc_id of the document to delete.
 
         """
-        raise NotImplementedError("Delete not yet implemented for MyScale index.")
+        self._client.command(
+            f"DELETE FROM {self.config.database}.{self.config.table} "
+            f"where doc_id='{ref_doc_id}'"
+        )
 
     def drop(self) -> None:
-        """Drop MyScale Index and table"""
+        """Drop MyScale Index and table."""
         self._client.command(
             f"DROP TABLE IF EXISTS {self.config.database}.{self.config.table}"
         )
@@ -217,33 +260,58 @@ class MyScaleVectorStore(VectorStore):
             query (VectorStoreQuery): query
 
         """
-        if query.filters is not None:
-            raise ValueError(
-                "Metadata filters not implemented for SimpleVectorStore yet."
-            )
-
         query_embedding = cast(List[float], query.query_embedding)
         where_str = (
             f"doc_id in {format_list_to_string(query.doc_ids)}"
             if query.doc_ids
             else None
         )
+        if query.filters is not None:
+            where_str = self._append_meta_filter_condition(
+                where_str, query.filters.filters
+            )
+
+        # build query sql
         query_statement = self.config.build_query_statement(
             query_embed=query_embedding,
             where_str=where_str,
             limit=query.similarity_top_k,
         )
-
+        if query.mode == VectorStoreQueryMode.HYBRID and query.query_str is not None:
+            amplify_ratio = self.AMPLIFY_RATIO_LE5
+            if 5 < query.similarity_top_k < 50:
+                amplify_ratio = self.AMPLIFY_RATIO_GT5
+            if query.similarity_top_k > 50:
+                amplify_ratio = self.AMPLIFY_RATIO_GT50
+            query_statement = self._build_hybrid_search_statement(
+                self.config.build_query_statement(
+                    query_embed=query_embedding,
+                    where_str=where_str,
+                    limit=query.similarity_top_k * amplify_ratio,
+                ),
+                query.query_str,
+                query.similarity_top_k,
+            )
+            logger.debug(f"hybrid query_statement={query_statement}")
         nodes = []
         ids = []
         similarities = []
         for r in self._client.query(query_statement).named_results():
-            node = Node(
-                doc_id=r["doc_id"],
+            start_char_idx = None
+            end_char_idx = None
+
+            if isinstance(r["node_info"], dict):
+                start_char_idx = r["node_info"].get("start", None)
+                end_char_idx = r["node_info"].get("end", None)
+            node = TextNode(
+                id_=r["doc_id"],
                 text=r["text"],
-                extra_info=r["extra_info"],
-                node_info=r["node_info"],
-                relationships={DocumentRelationship.SOURCE: r["doc_id"]},
+                metadata=r["metadata"],
+                start_char_idx=start_char_idx,
+                end_char_idx=end_char_idx,
+                relationships={
+                    NodeRelationship.SOURCE: RelatedNodeInfo(node_id=r["doc_id"])
+                },
             )
 
             nodes.append(node)

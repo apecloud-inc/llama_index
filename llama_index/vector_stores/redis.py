@@ -7,7 +7,6 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 import fsspec
 
-from llama_index.data_structs.node import DocumentRelationship, Node
 from llama_index.readers.redis.utils import (
     TokenEscaper,
     array_to_buffer,
@@ -15,14 +14,20 @@ from llama_index.readers.redis.utils import (
     convert_bytes,
     get_redis_query,
 )
+from llama_index.schema import (
+    BaseNode,
+    MetadataMode,
+    NodeRelationship,
+    RelatedNodeInfo,
+    TextNode,
+)
 from llama_index.vector_stores.types import (
     MetadataFilters,
-    NodeWithEmbedding,
     VectorStore,
     VectorStoreQuery,
     VectorStoreQueryResult,
 )
-from llama_index.vector_stores.utils import node_to_metadata_dict
+from llama_index.vector_stores.utils import metadata_dict_to_node, node_to_metadata_dict
 
 _logger = logging.getLogger(__name__)
 
@@ -35,6 +40,7 @@ if TYPE_CHECKING:
 class RedisVectorStore(VectorStore):
     stores_text = True
     stores_node = True
+    flat_metadata = False
 
     tokenizer = TokenEscaper()
 
@@ -42,6 +48,7 @@ class RedisVectorStore(VectorStore):
         self,
         index_name: str,
         index_prefix: str = "llama_index",
+        prefix_ending: str = "/vector",
         index_args: Optional[Dict[str, Any]] = None,
         metadata_fields: Optional[List[str]] = None,
         redis_url: str = "redis://localhost:6379",
@@ -61,6 +68,11 @@ class RedisVectorStore(VectorStore):
         Args:
             index_name (str): Name of the index.
             index_prefix (str): Prefix for the index. Defaults to "llama_index".
+                The actual prefix used by Redis will be
+                "{index_prefix}{prefix_ending}".
+            prefix_ending (str): Prefix ending for the index. Be careful when
+                changing this: https://github.com/jerryjliu/llama_index/pull/6665.
+                Defaults to "/vector".
             index_args (Dict[str, Any]): Arguments for the index. Defaults to None.
             metadata_fields (List[str]): List of metadata fields to store in the index
                 (only supports TAG fields).
@@ -79,12 +91,11 @@ class RedisVectorStore(VectorStore):
             >>> # Create a RedisVectorStore
             >>> vector_store = RedisVectorStore(
             >>>     index_name="my_index",
-            >>>     index_prefix="gpt_index",
+            >>>     index_prefix="llama_index",
             >>>     index_args={"algorithm": "HNSW", "m": 16, "ef_construction": 200,
                 "distance_metric": "cosine"},
             >>>     redis_url="redis://localhost:6379/",
             >>>     overwrite=True)
-
         """
         try:
             import redis
@@ -102,7 +113,7 @@ class RedisVectorStore(VectorStore):
             raise ValueError(f"Redis failed to connect: {e}")
 
         # index identifiers
-        self._prefix = index_prefix
+        self._prefix = index_prefix + prefix_ending
         self._index_name = index_name
         self._index_args = index_args if index_args is not None else {}
         self._metadata_fields = metadata_fields if metadata_fields is not None else []
@@ -112,15 +123,14 @@ class RedisVectorStore(VectorStore):
 
     @property
     def client(self) -> "RedisType":
-        """Return the redis client instance"""
+        """Return the redis client instance."""
         return self._redis_client
 
-    def add(self, embedding_results: List[NodeWithEmbedding]) -> List[str]:
-        """Add embedding results to the index.
+    def add(self, nodes: List[BaseNode], **add_kwargs: Any) -> List[str]:
+        """Add nodes to the index.
 
         Args:
-            embedding_results (List[NodeWithEmbedding]): List of embedding results to
-                add to the index.
+            nodes (List[BaseNode]): List of nodes with embeddings
 
         Returns:
             List[str]: List of ids of the documents added to the index.
@@ -129,11 +139,11 @@ class RedisVectorStore(VectorStore):
             ValueError: If the index already exists and overwrite is False.
         """
         # check to see if empty document list was passed
-        if len(embedding_results) == 0:
+        if len(nodes) == 0:
             return []
 
         # set vector dim for creation if index doesn't exist
-        self._index_args["dims"] = len(embedding_results[0].embedding)
+        self._index_args["dims"] = len(nodes[0].get_embedding())
 
         if self._index_exists():
             if self._overwrite:
@@ -145,18 +155,20 @@ class RedisVectorStore(VectorStore):
             self._create_index()
 
         ids = []
-        for result in embedding_results:
+        for node in nodes:
             mapping = {
-                "id": result.id,
-                "doc_id": result.ref_doc_id,
-                "text": result.node.get_text(),
-                self._vector_key: array_to_buffer(result.embedding),
+                "id": node.node_id,
+                "doc_id": node.ref_doc_id,
+                "text": node.get_content(metadata_mode=MetadataMode.NONE),
+                self._vector_key: array_to_buffer(node.get_embedding()),
             }
-            additional_metadata = node_to_metadata_dict(result.node)
+            additional_metadata = node_to_metadata_dict(
+                node, remove_text=True, flat_metadata=self.flat_metadata
+            )
             mapping.update(additional_metadata)
 
-            ids.append(result.id)
-            key = "_".join([self._prefix, str(result.id)])
+            ids.append(node.node_id)
+            key = "_".join([self._prefix, str(node.node_id)])
             self._redis_client.hset(key, mapping=mapping)  # type: ignore
 
         _logger.info(f"Added {len(ids)} documents to index {self._index_name}")
@@ -212,7 +224,14 @@ class RedisVectorStore(VectorStore):
         from redis.exceptions import RedisError
         from redis.exceptions import TimeoutError as RedisTimeoutError
 
-        return_fields = ["id", "doc_id", "text", self._vector_key, "vector_score"]
+        return_fields = [
+            "id",
+            "doc_id",
+            "text",
+            self._vector_key,
+            "vector_score",
+            "_node_content",
+        ]
 
         filters = _to_redis_filters(query.filters) if query.filters is not None else "*"
 
@@ -239,10 +258,10 @@ class RedisVectorStore(VectorStore):
             )
         except RedisTimeoutError as e:
             _logger.error(f"Query timed out on {self._index_name}: {e}")
-            raise e
+            raise
         except RedisError as e:
             _logger.error(f"Error querying {self._index_name}: {e}")
-            raise e
+            raise
 
         if len(results.docs) == 0:
             raise ValueError(
@@ -256,13 +275,19 @@ class RedisVectorStore(VectorStore):
         nodes = []
         scores = []
         for doc in results.docs:
-            # TODO: properly retrieve metadata
-            node = Node(
-                text=doc.text,
-                doc_id=doc.id,
-                embedding=None,
-                relationships={DocumentRelationship.SOURCE: doc.doc_id},
-            )
+            try:
+                node = metadata_dict_to_node({"_node_content": doc._node_content})
+                node.text = doc.text
+            except Exception:
+                # TODO: Legacy support for old metadata format
+                node = TextNode(
+                    text=doc.text,
+                    id_=doc.id,
+                    embedding=None,
+                    relationships={
+                        NodeRelationship.SOURCE: RelatedNodeInfo(node_id=doc.doc_id)
+                    },
+                )
             ids.append(doc.id)
             nodes.append(node)
             scores.append(1 - float(doc.vector_score))
@@ -300,7 +325,7 @@ class RedisVectorStore(VectorStore):
 
         except RedisError as e:
             _logger.error(f"Error saving index to disk: {e}")
-            raise e
+            raise
 
     def _create_index(self) -> None:
         # should never be called outside class and hence should not raise importerror
@@ -316,8 +341,9 @@ class RedisVectorStore(VectorStore):
         # add vector field to list of index fields. Create lazily to allow user
         # to specify index and search attributes in creation.
 
-        fields = default_fields + [
-            self._create_vector_field(self._vector_field, **self._index_args)
+        fields = [
+            *default_fields,
+            self._create_vector_field(self._vector_field, **self._index_args),
         ]
 
         # add metadata fields to list of index fields or we won't be able to search them
@@ -372,7 +398,7 @@ class RedisVectorStore(VectorStore):
             ef_runtime (int): The umber of maximum top candidates to hold during the
                 KNN search
 
-        returns:
+        Returns:
             A RediSearch VectorField.
         """
         from redis import DataError
@@ -422,7 +448,7 @@ def _to_redis_filters(metadata_filters: MetadataFilters) -> str:
     for filter in metadata_filters.filters:
         # adds quotes around the value to ensure that the filter is treated as an
         #   exact match
-        filter_string = "@%s:{%s}" % (filter.key, tokenizer.escape(str(filter.value)))
+        filter_string = f"@{filter.key}:{{{tokenizer.escape(str(filter.value))}}}"
         filter_strings.append(filter_string)
 
     joined_filter_strings = " & ".join(filter_strings)

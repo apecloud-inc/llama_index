@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, cast
 
 from llama_index.readers.base import BaseReader
-from llama_index.readers.schema.base import Document
+from llama_index.schema import Document
 
 
 class VideoAudioReader(BaseReader):
@@ -43,7 +43,7 @@ class VideoAudioReader(BaseReader):
 
         if file.name.endswith("mp4"):
             try:
-                from pydub import AudioSegment  # noqa: F401
+                from pydub import AudioSegment
             except ImportError:
                 raise ImportError("Please install pydub 'pip install pydub' ")
             # open file
@@ -61,4 +61,4 @@ class VideoAudioReader(BaseReader):
 
         transcript = result["text"]
 
-        return [Document(transcript, extra_info=extra_info)]
+        return [Document(text=transcript, metadata=extra_info or {})]

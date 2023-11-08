@@ -3,19 +3,21 @@
 An index that that is built on top of an existing vector store.
 
 """
-
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+import logging
+from typing import Any, Dict, List, Optional, Sequence
 
 from llama_index.async_utils import run_async_tasks
 from llama_index.data_structs.data_structs import IndexDict
-from llama_index.data_structs.node import ImageNode, IndexNode, Node
 from llama_index.indices.base import BaseIndex
 from llama_index.indices.base_retriever import BaseRetriever
 from llama_index.indices.service_context import ServiceContext
+from llama_index.indices.utils import async_embed_nodes, embed_nodes
+from llama_index.schema import BaseNode, ImageNode, IndexNode
 from llama_index.storage.docstore.types import RefDocInfo
 from llama_index.storage.storage_context import StorageContext
-from llama_index.token_counter.token_counter import llm_token_counter
-from llama_index.vector_stores.types import NodeWithEmbedding, VectorStore
+from llama_index.vector_stores.types import VectorStore
+
+logger = logging.getLogger(__name__)
 
 
 class VectorStoreIndex(BaseIndex[IndexDict]):
@@ -23,6 +25,7 @@ class VectorStoreIndex(BaseIndex[IndexDict]):
 
     Args:
         use_async (bool): Whether to use asynchronous calls. Defaults to False.
+        show_progress (bool): Whether to show tqdm progress bars. Defaults to False.
         store_nodes_override (bool): set to True to always store Node objects in index
             store and document store even if vector store keeps text. Defaults to False
     """
@@ -31,12 +34,13 @@ class VectorStoreIndex(BaseIndex[IndexDict]):
 
     def __init__(
         self,
-        nodes: Optional[Sequence[Node]] = None,
+        nodes: Optional[Sequence[BaseNode]] = None,
         index_struct: Optional[IndexDict] = None,
         service_context: Optional[ServiceContext] = None,
         storage_context: Optional[StorageContext] = None,
         use_async: bool = False,
         store_nodes_override: bool = False,
+        show_progress: bool = False,
         **kwargs: Any,
     ) -> None:
         """Initialize params."""
@@ -47,6 +51,7 @@ class VectorStoreIndex(BaseIndex[IndexDict]):
             index_struct=index_struct,
             service_context=service_context,
             storage_context=storage_context,
+            show_progress=show_progress,
             **kwargs,
         )
 
@@ -76,159 +81,183 @@ class VectorStoreIndex(BaseIndex[IndexDict]):
         from llama_index.indices.vector_store.retrievers import VectorIndexRetriever
 
         return VectorIndexRetriever(
-            self, doc_ids=list(self.index_struct.nodes_dict.values()), **kwargs
+            self,
+            node_ids=list(self.index_struct.nodes_dict.values()),
+            **kwargs,
         )
 
-    def get_vector_store(self):
-        return self._vector_store
-
-    def _get_node_embedding_results(
-        self, nodes: Sequence[Node]
-    ) -> List[NodeWithEmbedding]:
+    def _get_node_with_embedding(
+        self,
+        nodes: Sequence[BaseNode],
+        show_progress: bool = False,
+    ) -> List[BaseNode]:
         """Get tuples of id, node, and embedding.
 
         Allows us to store these nodes in a vector store.
         Embeddings are called in batches.
 
         """
-        id_to_embed_map: Dict[str, List[float]] = {}
-
-        for n in nodes:
-            if n.embedding is None:
-                self._service_context.embed_model.queue_text_for_embedding(
-                    n.get_doc_id(), n.get_text()
-                )
-            else:
-                id_to_embed_map[n.get_doc_id()] = n.embedding
-
-        # call embedding model to get embeddings
-        (
-            result_ids,
-            result_embeddings,
-        ) = self._service_context.embed_model.get_queued_text_embeddings()
-        for new_id, text_embedding in zip(result_ids, result_embeddings):
-            id_to_embed_map[new_id] = text_embedding
+        id_to_embed_map = embed_nodes(
+            nodes, self._service_context.embed_model, show_progress=show_progress
+        )
 
         results = []
         for node in nodes:
-            embedding = id_to_embed_map[node.get_doc_id()]
-            result = NodeWithEmbedding(node=node, embedding=embedding)
+            embedding = id_to_embed_map[node.node_id]
+            result = node.copy()
+            result.embedding = embedding
             results.append(result)
         return results
 
-    async def _aget_node_embedding_results(
+    async def _aget_node_with_embedding(
         self,
-        nodes: Sequence[Node],
-    ) -> List[NodeWithEmbedding]:
+        nodes: Sequence[BaseNode],
+        show_progress: bool = False,
+    ) -> List[BaseNode]:
         """Asynchronously get tuples of id, node, and embedding.
 
         Allows us to store these nodes in a vector store.
         Embeddings are called in batches.
 
         """
-        id_to_embed_map: Dict[str, List[float]] = {}
-
-        text_queue: List[Tuple[str, str]] = []
-        for n in nodes:
-            if n.embedding is None:
-                text_queue.append((n.get_doc_id(), n.get_text()))
-            else:
-                id_to_embed_map[n.get_doc_id()] = n.embedding
-
-        # call embedding model to get embeddings
-        (
-            result_ids,
-            result_embeddings,
-        ) = await self._service_context.embed_model.aget_queued_text_embeddings(
-            text_queue
+        id_to_embed_map = await async_embed_nodes(
+            nodes=nodes,
+            embed_model=self._service_context.embed_model,
+            show_progress=show_progress,
         )
-
-        for new_id, text_embedding in zip(result_ids, result_embeddings):
-            id_to_embed_map[new_id] = text_embedding
 
         results = []
         for node in nodes:
-            embedding = id_to_embed_map[node.get_doc_id()]
-            result = NodeWithEmbedding(node=node, embedding=embedding)
+            embedding = id_to_embed_map[node.node_id]
+            result = node.copy()
+            result.embedding = embedding
             results.append(result)
         return results
 
     async def _async_add_nodes_to_index(
-        self, index_struct: IndexDict, nodes: Sequence[Node]
+        self,
+        index_struct: IndexDict,
+        nodes: Sequence[BaseNode],
+        show_progress: bool = False,
+        **insert_kwargs: Any,
     ) -> None:
         """Asynchronously add nodes to index."""
         if not nodes:
             return
 
-        embedding_results = await self._aget_node_embedding_results(nodes)
-        new_ids = self._vector_store.add(embedding_results)
+        nodes = await self._aget_node_with_embedding(nodes, show_progress)
+        new_ids = await self._vector_store.async_add(nodes, **insert_kwargs)
 
         # if the vector store doesn't store text, we need to add the nodes to the
         # index struct and document store
         if not self._vector_store.stores_text or self._store_nodes_override:
-            for result, new_id in zip(embedding_results, new_ids):
-                index_struct.add_node(result.node, text_id=new_id)
-                self._docstore.add_documents([result.node], allow_update=True)
+            for node, new_id in zip(nodes, new_ids):
+                # NOTE: remove embedding from node to avoid duplication
+                node_without_embedding = node.copy()
+                node_without_embedding.embedding = None
+
+                index_struct.add_node(node_without_embedding, text_id=new_id)
+                self._docstore.add_documents(
+                    [node_without_embedding], allow_update=True
+                )
         else:
             # NOTE: if the vector store keeps text,
             # we only need to add image and index nodes
-            for result, new_id in zip(embedding_results, new_ids):
-                if isinstance(result.node, (ImageNode, IndexNode)):
-                    index_struct.add_node(result.node, text_id=new_id)
-                    self._docstore.add_documents([result.node], allow_update=True)
+            for node, new_id in zip(nodes, new_ids):
+                if isinstance(node, (ImageNode, IndexNode)):
+                    # NOTE: remove embedding from node to avoid duplication
+                    node_without_embedding = node.copy()
+                    node_without_embedding.embedding = None
+
+                    index_struct.add_node(node_without_embedding, text_id=new_id)
+                    self._docstore.add_documents(
+                        [node_without_embedding], allow_update=True
+                    )
 
     def _add_nodes_to_index(
         self,
         index_struct: IndexDict,
-        nodes: Sequence[Node],
+        nodes: Sequence[BaseNode],
+        show_progress: bool = False,
+        **insert_kwargs: Any,
     ) -> None:
         """Add document to index."""
         if not nodes:
             return
 
-        embedding_results = self._get_node_embedding_results(nodes)
-        new_ids = self._vector_store.add(embedding_results)
+        nodes = self._get_node_with_embedding(nodes, show_progress)
+        new_ids = self._vector_store.add(nodes, **insert_kwargs)
 
         if not self._vector_store.stores_text or self._store_nodes_override:
             # NOTE: if the vector store doesn't store text,
             # we need to add the nodes to the index struct and document store
-            for result, new_id in zip(embedding_results, new_ids):
-                index_struct.add_node(result.node, text_id=new_id)
-                self._docstore.add_documents([result.node], allow_update=True)
+            for node, new_id in zip(nodes, new_ids):
+                # NOTE: remove embedding from node to avoid duplication
+                node_without_embedding = node.copy()
+                node_without_embedding.embedding = None
+
+                index_struct.add_node(node_without_embedding, text_id=new_id)
+                self._docstore.add_documents(
+                    [node_without_embedding], allow_update=True
+                )
         else:
             # NOTE: if the vector store keeps text,
             # we only need to add image and index nodes
-            for result, new_id in zip(embedding_results, new_ids):
-                if isinstance(result.node, (ImageNode, IndexNode)):
-                    index_struct.add_node(result.node, text_id=new_id)
-                    self._docstore.add_documents([result.node], allow_update=True)
+            for node, new_id in zip(nodes, new_ids):
+                if isinstance(node, (ImageNode, IndexNode)):
+                    # NOTE: remove embedding from node to avoid duplication
+                    node_without_embedding = node.copy()
+                    node_without_embedding.embedding = None
 
-    def _build_index_from_nodes(self, nodes: Sequence[Node]) -> IndexDict:
+                    index_struct.add_node(node_without_embedding, text_id=new_id)
+                    self._docstore.add_documents(
+                        [node_without_embedding], allow_update=True
+                    )
+
+    def _build_index_from_nodes(
+        self,
+        nodes: Sequence[BaseNode],
+        **insert_kwargs: Any,
+    ) -> IndexDict:
         """Build index from nodes."""
         index_struct = self.index_struct_cls()
         if self._use_async:
-            tasks = [self._async_add_nodes_to_index(index_struct, nodes)]
+            tasks = [
+                self._async_add_nodes_to_index(
+                    index_struct,
+                    nodes,
+                    show_progress=self._show_progress,
+                    **insert_kwargs,
+                )
+            ]
             run_async_tasks(tasks)
         else:
-            self._add_nodes_to_index(index_struct, nodes)
+            self._add_nodes_to_index(
+                index_struct,
+                nodes,
+                show_progress=self._show_progress,
+                **insert_kwargs,
+            )
         return index_struct
 
-    @llm_token_counter("build_index_from_nodes")
-    def build_index_from_nodes(self, nodes: Sequence[Node]) -> IndexDict:
+    def build_index_from_nodes(
+        self,
+        nodes: Sequence[BaseNode],
+        **insert_kwargs: Any,
+    ) -> IndexDict:
         """Build the index from nodes.
 
         NOTE: Overrides BaseIndex.build_index_from_nodes.
             VectorStoreIndex only stores nodes in document store
             if vector store does not store text
         """
-        return self._build_index_from_nodes(nodes)
+        return self._build_index_from_nodes(nodes, **insert_kwargs)
 
-    def _insert(self, nodes: Sequence[Node], **insert_kwargs: Any) -> None:
+    def _insert(self, nodes: Sequence[BaseNode], **insert_kwargs: Any) -> None:
         """Insert a document."""
-        self._add_nodes_to_index(self._index_struct, nodes)
+        self._add_nodes_to_index(self._index_struct, nodes, **insert_kwargs)
 
-    @llm_token_counter("insert")
-    def insert_nodes(self, nodes: Sequence[Node], **insert_kwargs: Any) -> None:
+    def insert_nodes(self, nodes: Sequence[BaseNode], **insert_kwargs: Any) -> None:
         """Insert nodes.
 
         NOTE: overrides BaseIndex.insert_nodes.
@@ -238,12 +267,12 @@ class VectorStoreIndex(BaseIndex[IndexDict]):
         self._insert(nodes, **insert_kwargs)
         self._storage_context.index_store.add_index_struct(self._index_struct)
 
-    def _delete_node(self, doc_id: str, **delete_kwargs: Any) -> None:
+    def _delete_node(self, node_id: str, **delete_kwargs: Any) -> None:
         pass
 
     def delete_nodes(
         self,
-        doc_ids: List[str],
+        node_ids: List[str],
         delete_from_docstore: bool = False,
         **delete_kwargs: Any,
     ) -> None:
@@ -268,8 +297,9 @@ class VectorStoreIndex(BaseIndex[IndexDict]):
         if not self._vector_store.stores_text or self._store_nodes_override:
             ref_doc_info = self._docstore.get_ref_doc_info(ref_doc_id)
             if ref_doc_info is not None:
-                for doc_id in ref_doc_info.doc_ids:
-                    self._index_struct.delete(doc_id)
+                for node_id in ref_doc_info.node_ids:
+                    self._index_struct.delete(node_id)
+                    self._vector_store.delete(node_id)
 
         # delete from docstore only if needed
         if (
@@ -288,15 +318,15 @@ class VectorStoreIndex(BaseIndex[IndexDict]):
 
             all_ref_doc_info = {}
             for node in nodes:
-                ref_doc_id = node.ref_doc_id
-                if not ref_doc_id:
+                ref_node = node.source_node
+                if not ref_node:
                     continue
 
-                ref_doc_info = self.docstore.get_ref_doc_info(ref_doc_id)
+                ref_doc_info = self.docstore.get_ref_doc_info(ref_node.node_id)
                 if not ref_doc_info:
                     continue
 
-                all_ref_doc_info[ref_doc_id] = ref_doc_info
+                all_ref_doc_info[ref_node.node_id] = ref_doc_info
             return all_ref_doc_info
         else:
             raise NotImplementedError(

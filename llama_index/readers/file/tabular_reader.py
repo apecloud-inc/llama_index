@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional
 import pandas as pd
 
 from llama_index.readers.base import BaseReader
-from llama_index.readers.schema.base import Document
+from llama_index.schema import Document
 
 
 class CSVReader(BaseReader):
@@ -41,14 +41,14 @@ class CSVReader(BaseReader):
         except ImportError:
             raise ImportError("csv module is required to read CSV files.")
         text_list = []
-        with open(file, "r") as fp:
+        with open(file) as fp:
             csv_reader = csv.reader(fp)
             for row in csv_reader:
                 text_list.append(", ".join(row))
         if self._concat_rows:
-            return [Document("\n".join(text_list), extra_info=extra_info)]
+            return [Document(text="\n".join(text_list), metadata=extra_info)]
         else:
-            return [Document(text, extra_info=extra_info) for text in text_list]
+            return [Document(text=text, metadata=extra_info) for text in text_list]
 
 
 class PandasCSVReader(BaseReader):
@@ -104,6 +104,12 @@ class PandasCSVReader(BaseReader):
         ).tolist()
 
         if self._concat_rows:
-            return [Document((self._row_joiner).join(text_list), extra_info=extra_info)]
+            return [
+                Document(
+                    text=(self._row_joiner).join(text_list), metadata=extra_info or {}
+                )
+            ]
         else:
-            return [Document(text, extra_info=extra_info) for text in text_list]
+            return [
+                Document(text=text, metadata=extra_info or {}) for text in text_list
+            ]

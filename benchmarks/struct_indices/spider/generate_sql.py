@@ -4,15 +4,13 @@ import json
 import logging
 import os
 import re
+from typing import Any, cast
 
-from langchain.chat_models import ChatOpenAI
-from langchain.llms import OpenAI
-from langchain.base_language import BaseLanguageModel
 from sqlalchemy import create_engine, text
 from tqdm import tqdm
 
-from llama_index import SQLStructStoreIndex, LLMPredictor, SQLDatabase
-from typing import Any, cast
+from llama_index import LLMPredictor, SQLDatabase, SQLStructStoreIndex
+from llama_index.llms.openai import OpenAI
 
 logging.getLogger("root").setLevel(logging.WARNING)
 
@@ -29,12 +27,12 @@ def _generate_sql(
     query_engine = llama_index.as_query_engine()
     response = query_engine.query(nl_query_text)
     if (
-        response.extra_info is None
-        or "sql_query" not in response.extra_info
-        or response.extra_info["sql_query"] is None
+        response.metadata is None
+        or "sql_query" not in response.metadata
+        or response.metadata["sql_query"] is None
     ):
         raise RuntimeError("No SQL query generated.")
-    query = response.extra_info["sql_query"]
+    query = response.metadata["sql_query"]
     # Remove newlines and extra spaces.
     query = _newlines.sub(" ", query)
     query = _spaces.sub(" ", query)
@@ -88,11 +86,11 @@ if __name__ == "__main__":
         os.makedirs(args.output)
 
     # Load the Spider dataset from the input directory.
-    with open(os.path.join(args.input, "train_spider.json"), "r") as f:
+    with open(os.path.join(args.input, "train_spider.json")) as f:
         train_spider = json.load(f)
-    with open(os.path.join(args.input, "train_others.json"), "r") as f:
+    with open(os.path.join(args.input, "train_others.json")) as f:
         train_others = json.load(f)
-    with open(os.path.join(args.input, "dev.json"), "r") as f:
+    with open(os.path.join(args.input, "dev.json")) as f:
         dev = json.load(f)
 
     # Create all necessary SQL database objects.
@@ -106,10 +104,7 @@ if __name__ == "__main__":
         databases[db_name] = (SQLDatabase(engine=engine), engine)
 
     # Create the LlamaIndexes for all databases.
-    if args.model in ["gpt-3.5-turbo", "gpt-4"]:
-        llm: BaseLanguageModel = ChatOpenAI(model=args.model, temperature=0)
-    else:
-        llm = OpenAI(model=args.model, temperature=0)
+    llm = OpenAI(model=args.model, temperature=0)
     llm_predictor = LLMPredictor(llm=llm)
     llm_indexes = {}
     for db_name, (db, engine) in databases.items():

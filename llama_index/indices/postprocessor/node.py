@@ -1,81 +1,74 @@
 """Node postprocessor."""
 
 import logging
-import re
-from abc import abstractmethod
 from typing import Dict, List, Optional, cast
 
-from pydantic import BaseModel, Field, validator
-
-from llama_index.data_structs.node import DocumentRelationship, NodeWithScore
+from llama_index.bridge.pydantic import Field, validator
 from llama_index.indices.postprocessor.types import BaseNodePostprocessor
 from llama_index.indices.query.schema import QueryBundle
-from llama_index.indices.response import get_response_builder
-from llama_index.indices.response.type import ResponseMode
 from llama_index.indices.service_context import ServiceContext
-from llama_index.prompts.prompts import QuestionAnswerPrompt, RefinePrompt
+from llama_index.prompts.base import PromptTemplate
+from llama_index.response_synthesizers import ResponseMode, get_response_synthesizer
+from llama_index.schema import NodeRelationship, NodeWithScore
 from llama_index.storage.docstore import BaseDocumentStore
 
 logger = logging.getLogger(__name__)
 
 
-class BasePydanticNodePostprocessor(BaseModel, BaseNodePostprocessor):
-    """Node postprocessor."""
-
-    class Config:
-        arbitrary_types_allowed = True
-
-    @abstractmethod
-    def postprocess_nodes(
-        self,
-        nodes: List[NodeWithScore],
-        query_bundle: Optional[QueryBundle] = None,
-    ) -> List[NodeWithScore]:
-        """Postprocess nodes."""
-
-
-class KeywordNodePostprocessor(BasePydanticNodePostprocessor):
+class KeywordNodePostprocessor(BaseNodePostprocessor):
     """Keyword-based Node processor."""
 
     required_keywords: List[str] = Field(default_factory=list)
     exclude_keywords: List[str] = Field(default_factory=list)
+    lang: str = Field(default="en")
 
-    def postprocess_nodes(
+    @classmethod
+    def class_name(cls) -> str:
+        return "KeywordNodePostprocessor"
+
+    def _postprocess_nodes(
         self,
         nodes: List[NodeWithScore],
         query_bundle: Optional[QueryBundle] = None,
     ) -> List[NodeWithScore]:
         """Postprocess nodes."""
+        try:
+            import spacy
+        except ImportError:
+            raise ImportError(
+                "Spacy is not installed, please install it with `pip install spacy`."
+            )
+        from spacy.matcher import PhraseMatcher
+
+        nlp = spacy.blank(self.lang)
+        required_matcher = PhraseMatcher(nlp.vocab)
+        exclude_matcher = PhraseMatcher(nlp.vocab)
+        required_matcher.add("RequiredKeywords", list(nlp.pipe(self.required_keywords)))
+        exclude_matcher.add("ExcludeKeywords", list(nlp.pipe(self.exclude_keywords)))
+
         new_nodes = []
         for node_with_score in nodes:
             node = node_with_score.node
-            should_use_node = True
-            if self.required_keywords is not None:
-                for keyword in self.required_keywords:
-                    pattern = r"\b" + re.escape(keyword) + r"\b"
-                    keyword_presence = re.search(pattern, node.get_text())
-                    if not keyword_presence:
-                        should_use_node = False
-
-            if self.exclude_keywords is not None:
-                for keyword in self.exclude_keywords:
-                    pattern = r"\b" + re.escape(keyword) + r"\b"
-                    keyword_presence = re.search(keyword, node.get_text())
-                    if keyword_presence:
-                        should_use_node = False
-
-            if should_use_node:
-                new_nodes.append(node_with_score)
+            doc = nlp(node.get_content())
+            if self.required_keywords and not required_matcher(doc):
+                continue
+            if self.exclude_keywords and exclude_matcher(doc):
+                continue
+            new_nodes.append(node_with_score)
 
         return new_nodes
 
 
-class SimilarityPostprocessor(BasePydanticNodePostprocessor):
+class SimilarityPostprocessor(BaseNodePostprocessor):
     """Similarity-based Node processor."""
 
     similarity_cutoff: float = Field(default=None)
 
-    def postprocess_nodes(
+    @classmethod
+    def class_name(cls) -> str:
+        return "SimilarityPostprocessor"
+
+    def _postprocess_nodes(
         self,
         nodes: List[NodeWithScore],
         query_bundle: Optional[QueryBundle] = None,
@@ -104,17 +97,20 @@ def get_forward_nodes(
 ) -> Dict[str, NodeWithScore]:
     """Get forward nodes."""
     node = node_with_score.node
-    nodes: Dict[str, NodeWithScore] = {node.get_doc_id(): node_with_score}
+    nodes: Dict[str, NodeWithScore] = {node.node_id: node_with_score}
     cur_count = 0
     # get forward nodes in an iterative manner
     while cur_count < num_nodes:
-        if DocumentRelationship.NEXT not in node.relationships:
+        if NodeRelationship.NEXT not in node.relationships:
             break
-        next_node_id = node.relationships[DocumentRelationship.NEXT]
+
+        next_node_info = node.next_node
+        if next_node_info is None:
+            break
+
+        next_node_id = next_node_info.node_id
         next_node = docstore.get_node(next_node_id)
-        if next_node is None:
-            break
-        nodes[next_node.get_doc_id()] = NodeWithScore(next_node)
+        nodes[next_node.node_id] = NodeWithScore(node=next_node)
         node = next_node
         cur_count += 1
     return nodes
@@ -126,22 +122,23 @@ def get_backward_nodes(
     """Get backward nodes."""
     node = node_with_score.node
     # get backward nodes in an iterative manner
-    nodes: Dict[str, NodeWithScore] = {node.get_doc_id(): node_with_score}
+    nodes: Dict[str, NodeWithScore] = {node.node_id: node_with_score}
     cur_count = 0
     while cur_count < num_nodes:
-        if DocumentRelationship.PREVIOUS not in node.relationships:
+        prev_node_info = node.prev_node
+        if prev_node_info is None:
             break
-        prev_node_id = node.relationships[DocumentRelationship.PREVIOUS]
+        prev_node_id = prev_node_info.node_id
         prev_node = docstore.get_node(prev_node_id)
         if prev_node is None:
             break
-        nodes[prev_node.get_doc_id()] = NodeWithScore(prev_node)
+        nodes[prev_node.node_id] = NodeWithScore(node=prev_node)
         node = prev_node
         cur_count += 1
     return nodes
 
 
-class PrevNextNodePostprocessor(BasePydanticNodePostprocessor):
+class PrevNextNodePostprocessor(BaseNodePostprocessor):
     """Previous/Next Node post-processor.
 
     Allows users to fetch additional nodes from the document store,
@@ -168,7 +165,11 @@ class PrevNextNodePostprocessor(BasePydanticNodePostprocessor):
             raise ValueError(f"Invalid mode: {v}")
         return v
 
-    def postprocess_nodes(
+    @classmethod
+    def class_name(cls) -> str:
+        return "PrevNextNodePostprocessor"
+
+    def _postprocess_nodes(
         self,
         nodes: List[NodeWithScore],
         query_bundle: Optional[QueryBundle] = None,
@@ -176,7 +177,7 @@ class PrevNextNodePostprocessor(BasePydanticNodePostprocessor):
         """Postprocess nodes."""
         all_nodes: Dict[str, NodeWithScore] = {}
         for node in nodes:
-            all_nodes[node.node.get_doc_id()] = node
+            all_nodes[node.node.node_id] = node
             if self.mode == "next":
                 all_nodes.update(get_forward_nodes(node, self.num_nodes, self.docstore))
             elif self.mode == "previous":
@@ -191,8 +192,30 @@ class PrevNextNodePostprocessor(BasePydanticNodePostprocessor):
             else:
                 raise ValueError(f"Invalid mode: {self.mode}")
 
-        sorted_nodes = sorted(all_nodes.values(), key=lambda x: x.node.get_doc_id())
-        return list(sorted_nodes)
+        all_nodes_values: List[NodeWithScore] = list(all_nodes.values())
+        sorted_nodes: List[NodeWithScore] = []
+        for node in all_nodes_values:
+            # variable to check if cand node is inserted
+            node_inserted = False
+            for i, cand in enumerate(sorted_nodes):
+                node_id = node.node.node_id
+                # prepend to current candidate
+                prev_node_info = cand.node.prev_node
+                next_node_info = cand.node.next_node
+                if prev_node_info is not None and node_id == prev_node_info.node_id:
+                    node_inserted = True
+                    sorted_nodes.insert(i, node)
+                    break
+                # append to current candidate
+                elif next_node_info is not None and node_id == next_node_info.node_id:
+                    node_inserted = True
+                    sorted_nodes.insert(i + 1, node)
+                    break
+
+            if not node_inserted:
+                sorted_nodes.append(node)
+
+        return sorted_nodes
 
 
 DEFAULT_INFER_PREV_NEXT_TMPL = (
@@ -233,7 +256,7 @@ DEFAULT_REFINE_INFER_PREV_NEXT_TMPL = (
 )
 
 
-class AutoPrevNextNodePostprocessor(BasePydanticNodePostprocessor):
+class AutoPrevNextNodePostprocessor(BaseNodePostprocessor):
     """Previous/Next Node post-processor.
 
     Allows users to fetch additional nodes from the document store,
@@ -265,6 +288,10 @@ class AutoPrevNextNodePostprocessor(BasePydanticNodePostprocessor):
 
         arbitrary_types_allowed = True
 
+    @classmethod
+    def class_name(cls) -> str:
+        return "AutoPrevNextNodePostprocessor"
+
     def _parse_prediction(self, raw_pred: str) -> str:
         """Parse prediction."""
         pred = raw_pred.strip().lower()
@@ -276,7 +303,7 @@ class AutoPrevNextNodePostprocessor(BasePydanticNodePostprocessor):
             return "none"
         raise ValueError(f"Invalid prediction: {raw_pred}")
 
-    def postprocess_nodes(
+    def _postprocess_nodes(
         self,
         nodes: List[NodeWithScore],
         query_bundle: Optional[QueryBundle] = None,
@@ -285,24 +312,24 @@ class AutoPrevNextNodePostprocessor(BasePydanticNodePostprocessor):
         if query_bundle is None:
             raise ValueError("Missing query bundle.")
 
-        infer_prev_next_prompt = QuestionAnswerPrompt(
+        infer_prev_next_prompt = PromptTemplate(
             self.infer_prev_next_tmpl,
         )
-        refine_infer_prev_next_prompt = RefinePrompt(self.refine_prev_next_tmpl)
+        refine_infer_prev_next_prompt = PromptTemplate(self.refine_prev_next_tmpl)
 
         all_nodes: Dict[str, NodeWithScore] = {}
         for node in nodes:
-            all_nodes[node.node.get_doc_id()] = node
+            all_nodes[node.node.node_id] = node
             # use response builder instead of llm_predictor directly
             # to be more robust to handling long context
-            response_builder = get_response_builder(
+            response_builder = get_response_synthesizer(
                 service_context=self.service_context,
                 text_qa_template=infer_prev_next_prompt,
                 refine_template=refine_infer_prev_next_prompt,
-                mode=ResponseMode.TREE_SUMMARIZE,
+                response_mode=ResponseMode.TREE_SUMMARIZE,
             )
             raw_pred = response_builder.get_response(
-                text_chunks=[node.node.get_text()],
+                text_chunks=[node.node.get_content()],
                 query_str=query_bundle.query_str,
             )
             raw_pred = cast(str, raw_pred)
@@ -323,5 +350,38 @@ class AutoPrevNextNodePostprocessor(BasePydanticNodePostprocessor):
             else:
                 raise ValueError(f"Invalid mode: {mode}")
 
-        sorted_nodes = sorted(all_nodes.values(), key=lambda x: x.node.get_doc_id())
+        sorted_nodes = sorted(all_nodes.values(), key=lambda x: x.node.node_id)
         return list(sorted_nodes)
+
+
+class LongContextReorder(BaseNodePostprocessor):
+    """
+    Models struggle to access significant details found
+    in the center of extended contexts. A study
+    (https://arxiv.org/abs/2307.03172) observed that the best
+    performance typically arises when crucial data is positioned
+    at the start or conclusion of the input context. Additionally,
+    as the input context lengthens, performance drops notably, even
+    in models designed for long contexts.".
+    """
+
+    @classmethod
+    def class_name(cls) -> str:
+        return "LongContextReorder"
+
+    def _postprocess_nodes(
+        self,
+        nodes: List[NodeWithScore],
+        query_bundle: Optional[QueryBundle] = None,
+    ) -> List[NodeWithScore]:
+        """Postprocess nodes."""
+        reordered_nodes: List[NodeWithScore] = []
+        ordered_nodes: List[NodeWithScore] = sorted(
+            nodes, key=lambda x: x.score if x.score is not None else 0
+        )
+        for i, node in enumerate(ordered_nodes):
+            if i % 2 == 0:
+                reordered_nodes.insert(0, node)
+            else:
+                reordered_nodes.append(node)
+        return reordered_nodes

@@ -29,6 +29,9 @@ class PromptType(str, Enum):
     # text to sql
     TEXT_TO_SQL = "text_to_sql"
 
+    # text to graph query
+    TEXT_TO_GRAPH_QUERY = "text_to_graph_query"
+
     # table context
     TABLE_CONTEXT = "table_context"
 
@@ -57,6 +60,9 @@ class PromptType(str, Enum):
 
     # SQL response synthesis prompt
     SQL_RESPONSE_SYNTHESIS = "sql_response_synthesis"
+
+    # SQL response synthesis prompt (v2)
+    SQL_RESPONSE_SYNTHESIS_V2 = "sql_response_synthesis_v2"
 
     # Conversation
     CONVERSATION = "conversation"
